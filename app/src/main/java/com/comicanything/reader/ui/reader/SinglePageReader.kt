@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +35,7 @@ fun SinglePageReader(
     state: ReaderUiState,
     viewModel: ReaderViewModel
 ) {
+    val currentState by rememberUpdatedState(state)
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
@@ -46,19 +48,19 @@ fun SinglePageReader(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(state.readingMode) {
+            .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { offset ->
                         val width = size.width
-                        val isRtl = state.readingMode == ReadingMode.RTL
+                        val isRtl = currentState.readingMode == ReadingMode.RTL
                         when {
                             offset.x < width * 0.35f -> {
-                                val target = if (isRtl) state.currentPage + 1 else state.currentPage - 1
-                                if (target in 1..state.totalPages) viewModel.setPage(target)
+                                val target = if (isRtl) currentState.currentPage + 1 else currentState.currentPage - 1
+                                if (target in 1..currentState.totalPages) viewModel.setPage(target)
                             }
                             offset.x > width * 0.65f -> {
-                                val target = if (isRtl) state.currentPage - 1 else state.currentPage + 1
-                                if (target in 1..state.totalPages) viewModel.setPage(target)
+                                val target = if (isRtl) currentState.currentPage - 1 else currentState.currentPage + 1
+                                if (target in 1..currentState.totalPages) viewModel.setPage(target)
                             }
                             else -> viewModel.toggleControls()
                         }
