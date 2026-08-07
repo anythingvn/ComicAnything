@@ -22,25 +22,40 @@ data class ReaderUiState(
     val filterMode: ColorFilterMode = ColorFilterMode.AMOLED_BLACK,
     val autoCropMargins: Boolean = true,
     val isControlsVisible: Boolean = true,
-    val isLoadingDrive: Boolean = false
+    val isLoadingDrive: Boolean = false,
+    val hasStoragePermission: Boolean = false,
+    val isScanningLocal: Boolean = false
 )
 
-class ReaderViewModel : ViewModel() {
+class ReaderViewModel @JvmOverloads constructor(
+    private val localRepo: LocalFileRepository = LocalFileRepository(),
+    private val driveRepo: GoogleDriveRepository = GoogleDriveRepository()
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
-    private val localRepo = LocalFileRepository()
-    private val driveRepo = GoogleDriveRepository()
+    fun setPermissionGranted(granted: Boolean) {
+        val wasGranted = _uiState.value.hasStoragePermission
+        _uiState.value = _uiState.value.copy(hasStoragePermission = granted)
+        if (granted && !wasGranted) {
+            loadLocalLibrary()
+        } else if (!granted && wasGranted) {
+            _uiState.value = _uiState.value.copy(libraryComics = emptyList())
+        }
+    }
 
-    init {
-        loadLocalLibrary()
+    fun refreshLibrary() {
+        if (_uiState.value.hasStoragePermission) {
+            loadLocalLibrary()
+        }
     }
 
     fun loadLocalLibrary() {
         viewModelScope.launch {
-            val items = localRepo.scanStorageDirectories(null)
-            _uiState.value = _uiState.value.copy(libraryComics = items)
+            _uiState.value = _uiState.value.copy(isScanningLocal = true)
+            val items = localRepo.scanStorageDirectories()
+            _uiState.value = _uiState.value.copy(libraryComics = items, isScanningLocal = false)
         }
     }
 
