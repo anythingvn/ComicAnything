@@ -17,12 +17,14 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
+import androidx.compose.material3.Button
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,7 +36,8 @@ import com.comicanything.reader.ui.reader.ReaderViewModel
 @Composable
 fun HomeScreen(
     viewModel: ReaderViewModel,
-    onOpenComic: (ComicItem) -> Unit
+    onOpenComic: (ComicItem) -> Unit,
+    onRequestPermission: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -95,10 +98,46 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             when (selectedTab) {
-                0 -> LibraryContent(state, onOpenComic)
+                0 -> LibraryContent(state, onOpenComic, onRequestPermission)
                 1 -> DriveContent(state, driveUrlInput, onInputChange = { driveUrlInput = it }, onFetch = { viewModel.fetchDriveFolder(driveUrlInput) }, onOpenComic)
-                2 -> LocalFilesContent(state, onOpenComic)
+                2 -> LocalFilesContent(state, onOpenComic, onRequestPermission)
             }
+        }
+    }
+}
+
+@Composable
+fun PermissionRequiredCard(onRequestPermission: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Folder,
+            contentDescription = null,
+            tint = Color.Gray,
+            modifier = Modifier.size(56.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Storage access needed",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "ComicAnything needs access to your device storage to find PDF, CBZ, CBR, EPUB, and MOBI files.",
+            color = Color.Gray,
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onRequestPermission) {
+            Text("Grant Access")
         }
     }
 }
@@ -106,8 +145,14 @@ fun HomeScreen(
 @Composable
 fun LibraryContent(
     state: ReaderUiState,
-    onOpenComic: (ComicItem) -> Unit
+    onOpenComic: (ComicItem) -> Unit,
+    onRequestPermission: () -> Unit
 ) {
+    if (!state.hasStoragePermission) {
+        PermissionRequiredCard(onRequestPermission)
+        return
+    }
+
     val inProgress = state.libraryComics.filter { it.currentPage > 1 }
 
     Column(
@@ -194,55 +239,60 @@ fun LibraryContent(
             modifier = Modifier.fillMaxSize()
         ) {
             items(state.libraryComics) { comic ->
-                Card(
+                ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+            }
+        }
+    }
+}
+
+@Composable
+fun ComicGridCard(comic: ComicItem, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .height(200.dp)
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E2638)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Book,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.size(64.dp)
+                )
+                Surface(
                     modifier = Modifier
-                        .height(200.dp)
-                        .clickable { onOpenComic(comic) },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.8f)
                 ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .background(Color(0xFF1E2638)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Book,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.3f),
-                                modifier = Modifier.size(64.dp)
-                            )
-                            Surface(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(8.dp),
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color.Black.copy(alpha = 0.8f)
-                            ) {
-                                Text(
-                                    text = comic.format.name,
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        Text(
-                            text = comic.title,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = Color.White,
-                            modifier = Modifier.padding(8.dp)
-                        )
-                    }
+                    Text(
+                        text = comic.format.name,
+                        color = MaterialTheme.colorScheme.secondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
                 }
             }
+            Text(
+                text = comic.title,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = Color.White,
+                modifier = Modifier.padding(8.dp)
+            )
         }
     }
 }
@@ -312,9 +362,37 @@ fun DriveContent(
 @Composable
 fun LocalFilesContent(
     state: ReaderUiState,
-    onOpenComic: (ComicItem) -> Unit
+    onOpenComic: (ComicItem) -> Unit,
+    onRequestPermission: () -> Unit
 ) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Local Storage Scanner Ready.\nSupports PDF, CBZ, CBR, EPUB, MOBI.", color = Color.Gray)
+    if (!state.hasStoragePermission) {
+        PermissionRequiredCard(onRequestPermission)
+        return
+    }
+
+    if (state.libraryComics.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = "No comics found on this device.\nAdd PDF, CBZ, CBR, EPUB, or MOBI files to your storage.",
+                color = Color.Gray,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(32.dp)
+            )
+        }
+        return
+    }
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        items(state.libraryComics) { comic ->
+            ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+        }
     }
 }
