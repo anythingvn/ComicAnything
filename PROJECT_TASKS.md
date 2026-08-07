@@ -33,13 +33,13 @@ anything that assumes the app can read files on a real device.
 - [x] Make `LocalFileRepository.scanStorageDirectories` scan more than the single hardcoded `/storage/emulated/0/Download` path (spec calls out `/sdcard/Download/` and `/storage/emulated/0/` broadly) — recurse or let the user pick additional folders
 - [x] Replace the static placeholder in `LocalFilesContent` ([HomeScreen.kt:312-320](app/src/main/java/com/comicanything/reader/ui/home/HomeScreen.kt:312-320)) with a real list/grid bound to scan results, matching the Library tab's card style
 
-## Epic 2 — Core Page Rendering Engine ⬜
-*The critical gap — the reader currently shows a placeholder card, not actual comic pages. Nothing else in the reader matters until this exists.*
+## Epic 2 — Core Page Rendering Engine 🟨
+*Page-rendering-core sub-project verified 2026-08-07 end-to-end on the `comicanything_test` emulator: built a real 5-page PDF and an 11-page CBZ (natural-sort test names `page1.jpg`...`page11.jpg`) with Python/Pillow, pushed them to `/sdcard/Download/`, and confirmed in the reader — the PDF opens showing the real rendered first page (not a placeholder) with the scrubber correctly reading "Page 1 / 5"; the CBZ pages forward in correct natural order (page9 → page10 → page11, not page1 → page10); paging all 11 CBZ pages forward then back to page 1 (exercising the 5-page LRU cache's eviction/re-decode past its capacity) produced no crash and page 1 still rendered correctly on return, confirmed via `adb logcat` showing no `FATAL EXCEPTION`/`AndroidRuntime` traces; and opening a `sample.epub` (unsupported format) showed the "This format isn't supported yet" error card with no crash, with the back button correctly returning to the library. Reading modes, pinch-to-zoom, color filters, and auto-crop remain unimplemented (separate sub-projects).*
 
-- [ ] PDF page rendering using `android.graphics.pdf.PdfRenderer` (native API, no new dependency) — render page N to a `Bitmap` on a background thread
-- [ ] CBZ page extraction via `java.util.zip.ZipFile`/`ZipInputStream`, sorted naturally by filename, decoded to `Bitmap`
-- [ ] Page prefetch/LRU bitmap cache so paging forward/back doesn't re-decode every tap
-- [ ] Replace the placeholder `Card` in `ReaderScreen.kt:75-109` with the real rendered page (Coil `AsyncImage` or raw `Image(bitmap=...)`)
+- [x] PDF page rendering using `android.graphics.pdf.PdfRenderer` (native API, no new dependency) — render page N to a `Bitmap` on a background thread
+- [x] CBZ page extraction via `java.util.zip.ZipFile`/`ZipInputStream`, sorted naturally by filename, decoded to `Bitmap`
+- [x] Page prefetch/LRU bitmap cache so paging forward/back doesn't re-decode every tap
+- [x] Replace the placeholder `Card` in `ReaderScreen.kt:75-109` with the real rendered page (Coil `AsyncImage` or raw `Image(bitmap=...)`)
 - [ ] Make reading modes act on real pages: LTR/RTL page order, Webtoon continuous vertical scroll (`LazyColumn` of pages), Dual-page spread (two `Bitmap`s side by side)
 - [ ] Pinch-to-zoom gesture on the real page image (currently unimplemented — spec claims it, no code exists)
 - [ ] Apply color filter modes (Sepia/Night/AMOLED/High-Contrast) as a `ColorMatrix`/`BlendMode` over the real page instead of just tinting an empty background
