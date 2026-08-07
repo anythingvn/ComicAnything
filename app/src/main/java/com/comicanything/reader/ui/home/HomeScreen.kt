@@ -153,6 +153,13 @@ fun LibraryContent(
         return
     }
 
+    if (state.isScanningLocal) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        return
+    }
+
     val inProgress = state.libraryComics.filter { it.currentPage > 1 }
 
     Column(
@@ -367,6 +374,13 @@ fun LocalFilesContent(
 ) {
     if (!state.hasStoragePermission) {
         PermissionRequiredCard(onRequestPermission)
+        return
+    }
+
+    if (state.isScanningLocal) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
         return
     }
 

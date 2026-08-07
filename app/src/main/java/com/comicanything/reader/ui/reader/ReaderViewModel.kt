@@ -23,7 +23,8 @@ data class ReaderUiState(
     val autoCropMargins: Boolean = true,
     val isControlsVisible: Boolean = true,
     val isLoadingDrive: Boolean = false,
-    val hasStoragePermission: Boolean = false
+    val hasStoragePermission: Boolean = false,
+    val isScanningLocal: Boolean = false
 )
 
 class ReaderViewModel @JvmOverloads constructor(
@@ -44,10 +45,17 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    fun refreshLibrary() {
+        if (_uiState.value.hasStoragePermission) {
+            loadLocalLibrary()
+        }
+    }
+
     fun loadLocalLibrary() {
         viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isScanningLocal = true)
             val items = localRepo.scanStorageDirectories()
-            _uiState.value = _uiState.value.copy(libraryComics = items)
+            _uiState.value = _uiState.value.copy(libraryComics = items, isScanningLocal = false)
         }
     }
 

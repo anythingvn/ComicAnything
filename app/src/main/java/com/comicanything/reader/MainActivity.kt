@@ -58,7 +58,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        viewModel.setPermissionGranted(StoragePermissions.hasAccess(this))
+        val granted = StoragePermissions.hasAccess(this)
+        viewModel.setPermissionGranted(granted)
+        if (granted) {
+            viewModel.refreshLibrary()
+        }
     }
 
     private fun requestStoragePermission() {

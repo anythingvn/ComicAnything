@@ -67,4 +67,33 @@ class ReaderViewModelTest {
 
         assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
     }
+
+    @Test
+    fun `refreshLibrary re-scans and picks up newly added files when permission is granted`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(localRepo = repo)
+
+        viewModel.setPermissionGranted(true)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
+
+        File(tempFolder.root, "new_comic.pdf").writeText("fake")
+        viewModel.refreshLibrary()
+        advanceUntilIdle()
+
+        assertEquals(1, viewModel.uiState.value.libraryComics.size)
+    }
+
+    @Test
+    fun `refreshLibrary is a no-op when permission has never been granted`() = runTest {
+        File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(localRepo = repo)
+
+        viewModel.refreshLibrary()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
+        assertFalse(viewModel.uiState.value.hasStoragePermission)
+    }
 }

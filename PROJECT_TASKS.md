@@ -25,10 +25,10 @@ anything that assumes the app can read files on a real device.
 - [x] Run `./gradlew assembleDebug` and confirm a clean build succeeds end-to-end
 
 ## Epic 1 — Runtime Permissions & Local Storage Wiring ✅
-*Blocking for Epic 2/7 on-device: without granted permissions, local scanning silently returns only demo data.*
+*Blocking for Epic 2/7 on-device: without granted permissions, local scanning shows a "Grant Access" prompt instead of the library.*
 *Verified 2026-08-07 end-to-end on the `comicanything_test` emulator: fresh install, Library and Local Files tabs both show the "Storage access needed" card pre-grant, granting `MANAGE_EXTERNAL_STORAGE` via `appops` makes a real pushed file (`test.pdf`) appear tagged `PDF` on both tabs, and revoking the permission clears the library and brings the permission card back on both tabs. No crashes or errors in logcat during the run.*
 
-- [x] Add a runtime permission request flow in `MainActivity.kt` (API 33+: `READ_MEDIA_IMAGES`; API ≤32: `READ_EXTERNAL_STORAGE`; document the `MANAGE_EXTERNAL_STORAGE` special-permission flow already declared in the manifest, or drop it if unused)
+- [x] Add a runtime permission request flow in `MainActivity.kt` (API 30+: `MANAGE_EXTERNAL_STORAGE` via Settings redirect; API 24-29: `READ_EXTERNAL_STORAGE` via standard runtime dialog; dropped the unused `READ_MEDIA_IMAGES`/`READ_MEDIA_VIDEO` permissions from the manifest since they don't cover PDF/CBZ/EPUB/MOBI)
 - [x] Add a "permission denied" / "grant access" state to the Local Files tab UI instead of failing silently
 - [x] Make `LocalFileRepository.scanStorageDirectories` scan more than the single hardcoded `/storage/emulated/0/Download` path (spec calls out `/sdcard/Download/` and `/storage/emulated/0/` broadly) — recurse or let the user pick additional folders
 - [x] Replace the static placeholder in `LocalFilesContent` ([HomeScreen.kt:312-320](app/src/main/java/com/comicanything/reader/ui/home/HomeScreen.kt:312-320)) with a real list/grid bound to scan results, matching the Library tab's card style
@@ -82,9 +82,9 @@ anything that assumes the app can read files on a real device.
 - [ ] Confirm "Continue Reading" carousel resume tap opens the reader at the correct persisted page (depends on Epic 3)
 
 ## Epic 8 — Testing & Quality ⬜
-- [ ] Unit tests for `LocalFileRepository` (format detection, empty-dir fallback)
+- [x] Unit tests for `LocalFileRepository` (format detection, recursive scan, empty/nonexistent-dir handling) — done in Epic 1
 - [ ] Unit tests for `GoogleDriveRepository` (folder-ID extraction, JSON parsing, fallback behavior)
-- [ ] Unit tests for `ReaderViewModel` state transitions (`setPage` clamping, mode/filter toggles)
+- [ ] Unit tests for `ReaderViewModel` state transitions (`setPage` clamping, mode/filter toggles) — permission-grant/revoke/refresh transitions already covered in Epic 1; this item now covers the remaining reader-state methods
 - [ ] Instrumented Compose UI test for reader tap-zone navigation (left/right/center regions)
 - [ ] Manual QA pass on a physical device or emulator covering: local scan with real files, Drive folder with a real API key, all 4 reading modes, all 5 color filters
 
