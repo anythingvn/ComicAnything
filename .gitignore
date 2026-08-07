@@ -30,3 +30,6 @@ local.properties
 .cxx/
 captures/
 
+# Claude Code harness state (worktrees, etc.)
+.claude/
+
