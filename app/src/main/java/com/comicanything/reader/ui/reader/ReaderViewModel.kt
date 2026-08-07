@@ -1,16 +1,23 @@
 package com.comicanything.reader.ui.reader
 
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.comicanything.reader.data.model.ColorFilterMode
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ReadingMode
+import com.comicanything.reader.data.pagesource.PageBitmapCache
+import com.comicanything.reader.data.pagesource.PageDecodeException
+import com.comicanything.reader.data.pagesource.UnsupportedFormatException
+import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ReaderUiState(
     val libraryComics: List<ComicItem> = emptyList(),
@@ -24,7 +31,10 @@ data class ReaderUiState(
     val isControlsVisible: Boolean = true,
     val isLoadingDrive: Boolean = false,
     val hasStoragePermission: Boolean = false,
-    val isScanningLocal: Boolean = false
+    val isScanningLocal: Boolean = false,
+    val currentPageBitmap: Bitmap? = null,
+    val pageLoadError: String? = null,
+    val isPageLoading: Boolean = false
 )
 
 class ReaderViewModel @JvmOverloads constructor(
@@ -34,6 +44,8 @@ class ReaderViewModel @JvmOverloads constructor(
 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
+
+    private var pageCache: PageBitmapCache? = null
 
     fun setPermissionGranted(granted: Boolean) {
         val wasGranted = _uiState.value.hasStoragePermission
@@ -68,16 +80,41 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun openComic(comic: ComicItem) {
+        pageCache?.close()
+        pageCache = null
         _uiState.value = _uiState.value.copy(
             activeComic = comic,
             currentPage = comic.currentPage,
             totalPages = if (comic.totalPages > 0) comic.totalPages else 48,
-            isControlsVisible = true
+            isControlsVisible = true,
+            currentPageBitmap = null,
+            pageLoadError = null
         )
+        viewModelScope.launch {
+            val source = try {
+                createPageSource(comic)
+            } catch (e: UnsupportedFormatException) {
+                _uiState.value = _uiState.value.copy(pageLoadError = "This format isn't supported yet")
+                return@launch
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Failed to open comic")
+                return@launch
+            }
+            val cache = PageBitmapCache(source)
+            pageCache = cache
+            _uiState.value = _uiState.value.copy(totalPages = cache.pageCount)
+            loadPage(cache, _uiState.value.currentPage)
+        }
     }
 
     fun closeComic() {
-        _uiState.value = _uiState.value.copy(activeComic = null)
+        pageCache?.close()
+        pageCache = null
+        _uiState.value = _uiState.value.copy(
+            activeComic = null,
+            currentPageBitmap = null,
+            pageLoadError = null
+        )
     }
 
     fun setPage(page: Int) {
@@ -88,6 +125,30 @@ class ReaderViewModel @JvmOverloads constructor(
             comic.currentPage = clamped
             comic.progressPercentage = clamped.toFloat() / _uiState.value.totalPages.toFloat()
         }
+
+        val cache = pageCache ?: return
+        viewModelScope.launch {
+            loadPage(cache, clamped)
+        }
+    }
+
+    private suspend fun loadPage(cache: PageBitmapCache, page: Int) {
+        _uiState.value = _uiState.value.copy(isPageLoading = true)
+        try {
+            val bitmap = cache.getPage(page)
+            _uiState.value = _uiState.value.copy(
+                currentPageBitmap = bitmap,
+                pageLoadError = null,
+                isPageLoading = false
+            )
+        } catch (e: PageDecodeException) {
+            _uiState.value = _uiState.value.copy(
+                currentPageBitmap = null,
+                pageLoadError = e.message,
+                isPageLoading = false
+            )
+        }
+        cache.prefetch(listOf(page - 1, page + 1))
     }
 
     fun toggleControls() {

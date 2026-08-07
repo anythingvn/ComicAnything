@@ -119,4 +119,41 @@ class ReaderViewModelTest {
 
         assertNull(viewModel.uiState.value.activeComic)
     }
+
+    @Test
+    fun `opening a comic with an unsupported format sets an error and does not crash`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(localRepo = repo)
+        val comic = ComicItem(
+            id = "1",
+            title = "Unsupported Book",
+            pathOrUrl = "/fake/path.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        assertEquals("This format isn't supported yet", viewModel.uiState.value.pageLoadError)
+        assertNull(viewModel.uiState.value.currentPageBitmap)
+    }
+
+    @Test
+    fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(localRepo = repo)
+        val comic = ComicItem(
+            id = "2",
+            title = "Drive Book",
+            pathOrUrl = "https://drive.google.com/fake.pdf",
+            source = ComicSource.GOOGLE_DRIVE,
+            format = ComicFormat.PDF
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        assertEquals("This format isn't supported yet", viewModel.uiState.value.pageLoadError)
+    }
 }
