@@ -13,7 +13,12 @@ private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")
 
 fun listImagePagesSorted(zipFile: ZipFile): List<ZipEntry> {
     return zipFile.entries().asSequence()
-        .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS }
+        .filter { entry ->
+            !entry.isDirectory &&
+                !entry.name.startsWith("__MACOSX/") &&
+                !entry.name.substringAfterLast('/').startsWith(".") &&
+                entry.name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
+        }
         .sortedWith(compareBy(naturalOrderComparator()) { it.name })
         .toList()
 }

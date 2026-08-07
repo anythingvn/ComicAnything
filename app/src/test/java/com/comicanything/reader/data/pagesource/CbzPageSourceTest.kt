@@ -54,4 +54,14 @@ class CbzPageSourceTest {
         assertEquals(5, pages.size)
         zip.close()
     }
+
+    @Test
+    fun `excludes macOS AppleDouble resource-fork entries`() {
+        val zip = buildCbz("page1.jpg", "__MACOSX/._page1.jpg", "page2.jpg", "__MACOSX/._page2.jpg", ".DS_Store")
+
+        val pages = listImagePagesSorted(zip)
+
+        assertEquals(listOf("page1.jpg", "page2.jpg"), pages.map { it.name })
+        zip.close()
+    }
 }
