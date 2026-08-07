@@ -242,7 +242,12 @@ import java.io.File
 
 class PdfPageSource(file: File) : ComicPageSource {
     private val fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val renderer = PdfRenderer(fileDescriptor)
+    private val renderer = try {
+        PdfRenderer(fileDescriptor)
+    } catch (e: Exception) {
+        fileDescriptor.close()
+        throw e
+    }
     private val mutex = Mutex()
 
     override val pageCount: Int get() = renderer.pageCount
