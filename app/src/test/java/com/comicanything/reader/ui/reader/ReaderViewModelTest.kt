@@ -2,6 +2,7 @@ package com.comicanything.reader.ui.reader
 
 import com.comicanything.reader.MainDispatcherRule
 import com.comicanything.reader.data.repository.LocalFileRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -25,7 +26,7 @@ class ReaderViewModelTest {
     @Test
     fun `granting permission after being denied triggers a library load`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath)
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(localRepo = repo)
 
         assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
@@ -40,7 +41,7 @@ class ReaderViewModelTest {
     @Test
     fun `revoking permission clears the library`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath)
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(localRepo = repo)
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
@@ -55,7 +56,7 @@ class ReaderViewModelTest {
 
     @Test
     fun `granting permission when already granted does not reload`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath)
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(localRepo = repo)
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()

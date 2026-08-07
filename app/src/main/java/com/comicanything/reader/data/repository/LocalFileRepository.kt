@@ -3,12 +3,14 @@ package com.comicanything.reader.data.repository
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class LocalFileRepository(
-    private val rootPath: String = DEFAULT_ROOT
+    private val rootPath: String = DEFAULT_ROOT,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
     companion object {
@@ -16,7 +18,7 @@ class LocalFileRepository(
         private const val MAX_SCAN_DEPTH = 8
     }
 
-    suspend fun scanStorageDirectories(): List<ComicItem> = withContext(Dispatchers.IO) {
+    suspend fun scanStorageDirectories(): List<ComicItem> = withContext(ioDispatcher) {
         val rootDir = File(rootPath)
         if (!rootDir.exists() || !rootDir.isDirectory) return@withContext emptyList()
 
