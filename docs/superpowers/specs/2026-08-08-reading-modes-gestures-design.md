@@ -101,7 +101,7 @@ Spread pairing (page 1 alone, then 2-3, 4-5, ...), as a standalone pure function
 
 ```kotlin
 fun spreadPagesFor(currentPage: Int, totalPages: Int): Pair<Int, Int?> {
-    if (currentPage <= 1) return 1 to (2.takeIf { totalPages >= 2 })
+    if (currentPage <= 1) return 1 to null
     val left = if (currentPage % 2 == 0) currentPage else currentPage - 1
     val right = (left + 1).takeIf { it <= totalPages }
     return left to right
@@ -204,6 +204,6 @@ Tapping still needs to toggle the top/bottom control bars (the one piece of the 
 
 ## Testing
 
-- `spreadPagesFor` is a pure function (no Compose/Android dependency) — unit tested directly: page 1 → `(1, 2)`; page 2 or 3 → `(2, 3)`; page 4 or 5 → `(4, 5)`; last page when total is even → `(N, null)` is impossible under this pairing (evens always pair), but the last page when total is odd and ≥3 → `(N-1, N)` still pairs correctly since N-1 is even; a single-page comic (`totalPages == 1`) → `(1, null)`.
+- `spreadPagesFor` is a pure function (no Compose/Android dependency) — unit tested directly: page 1 always stands alone as the cover, `(1, null)`, regardless of total page count; page 2 or 3 → `(2, 3)`; page 4 or 5 → `(4, 5)`; when the non-cover page count (`totalPages - 1`) is odd, the final page has no partner, e.g. `totalPages == 6` → page 6 gives `(6, null)`.
 - Gesture code (`detectTapGestures`, `detectTransformGestures`), `produceState`-driven async loading, and `LazyColumn` scroll tracking are all Compose UI with no test infrastructure in this project (same constraint as sub-project 1's `ReaderScreen.kt` changes) — verified manually on the `comicanything_test` emulator: RTL tap direction, dual-spread pairing on a real multi-page comic, Webtoon scroll-to-page-sync, and pinch-to-zoom's scale/reset behavior.
 - `ReaderViewModel.loadPageBitmap` returning `PageLoadState.Failed` on `PageDecodeException` vs. `PageLoadState.Loaded` on success touches real `Bitmap`/`ComicPageSource` decode paths — no JVM test (same constraint as sub-project 1), covered by the same manual verification pass.
