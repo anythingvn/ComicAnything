@@ -32,6 +32,7 @@ class PdfPageSource(file: File) : ComicPageSource {
                         (pdfPage.height * scale).toInt(),
                         Bitmap.Config.ARGB_8888
                     )
+                    bitmap.eraseColor(android.graphics.Color.WHITE)
                     pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     bitmap
                 }
