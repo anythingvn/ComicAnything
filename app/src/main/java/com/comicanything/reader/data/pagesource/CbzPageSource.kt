@@ -47,18 +47,43 @@ class CbzPageSource(file: File) : ComicPageSource {
 
     override suspend fun getPage(page: Int): Bitmap = withContext(Dispatchers.IO) {
         try {
-            zipFile.getInputStream(pageEntries[page - 1]).use { stream ->
-                BitmapFactory.decodeStream(stream)
+            val entry = pageEntries[page - 1]
+            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            zipFile.getInputStream(entry).use { stream ->
+                BitmapFactory.decodeStream(stream, null, boundsOptions)
+            }
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(boundsOptions.outWidth, TARGET_WIDTH_PX)
+            }
+            zipFile.getInputStream(entry).use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOptions)
                     ?: throw IllegalStateException("decodeStream returned null")
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: OutOfMemoryError) {
+            throw PageDecodeException(page, e)
         } catch (e: Exception) {
             throw PageDecodeException(page, e)
         }
     }
 
+    private fun calculateInSampleSize(actualWidth: Int, targetWidth: Int): Int {
+        var sampleSize = 1
+        if (actualWidth > targetWidth) {
+            val halfWidth = actualWidth / 2
+            while (halfWidth / sampleSize >= targetWidth) {
+                sampleSize *= 2
+            }
+        }
+        return sampleSize
+    }
+
     override fun close() {
         zipFile.close()
+    }
+
+    companion object {
+        private const val TARGET_WIDTH_PX = 1080
     }
 }
