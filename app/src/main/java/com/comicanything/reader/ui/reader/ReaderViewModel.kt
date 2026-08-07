@@ -39,7 +39,7 @@ class ReaderViewModel : ViewModel() {
 
     fun loadLocalLibrary() {
         viewModelScope.launch {
-            val items = localRepo.scanStorageDirectories(null)
+            val items = localRepo.scanStorageDirectories()
             _uiState.value = _uiState.value.copy(libraryComics = items)
         }
     }
