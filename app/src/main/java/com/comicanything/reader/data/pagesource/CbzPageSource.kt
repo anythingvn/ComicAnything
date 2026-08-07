@@ -2,6 +2,7 @@ package com.comicanything.reader.data.pagesource
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -45,6 +46,8 @@ class CbzPageSource(file: File) : ComicPageSource {
                 BitmapFactory.decodeStream(stream)
                     ?: throw IllegalStateException("decodeStream returned null")
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw PageDecodeException(page, e)
         }
