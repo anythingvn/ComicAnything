@@ -22,3 +22,11 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Android / Gradle
+.gradle/
+local.properties
+*.iml
+.cxx/
+captures/
+
