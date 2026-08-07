@@ -3,6 +3,7 @@ package com.comicanything.reader.ui.reader
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -12,13 +13,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,39 +74,38 @@ fun ReaderScreen(
                 },
             contentAlignment = Alignment.Center
         ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .fillMaxHeight(0.85f)
-                    .padding(if (state.autoCropMargins) 0.dp else 16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+            when {
+                state.currentPageBitmap != null -> {
+                    val bitmap = state.currentPageBitmap!!
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "${comic.title}, page ${state.currentPage}",
+                        modifier = Modifier
+                            .fillMaxWidth(0.9f)
+                            .fillMaxHeight(0.85f)
+                            .padding(if (state.autoCropMargins) 0.dp else 16.dp)
+                    )
+                }
+                state.pageLoadError != null -> {
+                    val error = state.pageLoadError!!
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Default.MenuBook,
+                            imageVector = Icons.Default.ErrorOutline,
                             contentDescription = null,
                             tint = Color.Gray,
-                            modifier = Modifier.size(100.dp)
+                            modifier = Modifier.size(64.dp)
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "${comic.title}\nPage ${state.currentPage} of ${state.totalPages}",
+                            text = error,
+                            color = Color.White,
                             fontWeight = FontWeight.Bold,
-                            color = Color.Black,
-                            fontSize = 16.sp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Mode: ${state.readingMode.name} | Auto-Crop: ${if (state.autoCropMargins) "ON" else "OFF"}",
-                            fontSize = 12.sp,
-                            color = Color.DarkGray
+                            fontSize = 14.sp
                         )
                     }
+                }
+                else -> {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
