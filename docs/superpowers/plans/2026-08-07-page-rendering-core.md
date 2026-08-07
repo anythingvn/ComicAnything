@@ -134,6 +134,7 @@ package com.comicanything.reader.data.pagesource
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -177,6 +178,8 @@ class CbzPageSource(file: File) : ComicPageSource {
                 BitmapFactory.decodeStream(stream)
                     ?: throw IllegalStateException("decodeStream returned null")
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw PageDecodeException(page, e)
         }
@@ -187,6 +190,8 @@ class CbzPageSource(file: File) : ComicPageSource {
     }
 }
 ```
+
+(`CancellationException` is a subtype of `Exception` — it must be rethrown before the generic catch, or cancelling the coroutine reading a page gets silently rewrapped as a decode error instead of propagating as a cancellation. Add `import kotlinx.coroutines.CancellationException`.)
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -228,6 +233,7 @@ package com.comicanything.reader.data.pagesource
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -254,6 +260,8 @@ class PdfPageSource(file: File) : ComicPageSource {
                     pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     bitmap
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw PageDecodeException(page, e)
             }
