@@ -24,13 +24,14 @@ anything that assumes the app can read files on a real device.
 - [x] Add `gradle.properties` with `android.useAndroidX=true` — **discovered during verification, not in the original list.** The project has AndroidX dependencies but no `gradle.properties` at all; build failed with `Configuration :app:debugRuntimeClasspath contains AndroidX dependencies, but android.useAndroidX property is not enabled` until this was added
 - [x] Run `./gradlew assembleDebug` and confirm a clean build succeeds end-to-end
 
-## Epic 1 — Runtime Permissions & Local Storage Wiring 🟨
+## Epic 1 — Runtime Permissions & Local Storage Wiring ✅
 *Blocking for Epic 2/7 on-device: without granted permissions, local scanning silently returns only demo data.*
+*Verified 2026-08-07 end-to-end on the `comicanything_test` emulator: fresh install, Library and Local Files tabs both show the "Storage access needed" card pre-grant, granting `MANAGE_EXTERNAL_STORAGE` via `appops` makes a real pushed file (`test.pdf`) appear tagged `PDF` on both tabs, and revoking the permission clears the library and brings the permission card back on both tabs. No crashes or errors in logcat during the run.*
 
-- [ ] Add a runtime permission request flow in `MainActivity.kt` (API 33+: `READ_MEDIA_IMAGES`; API ≤32: `READ_EXTERNAL_STORAGE`; document the `MANAGE_EXTERNAL_STORAGE` special-permission flow already declared in the manifest, or drop it if unused)
-- [ ] Add a "permission denied" / "grant access" state to the Local Files tab UI instead of failing silently
-- [ ] Make `LocalFileRepository.scanStorageDirectories` scan more than the single hardcoded `/storage/emulated/0/Download` path (spec calls out `/sdcard/Download/` and `/storage/emulated/0/` broadly) — recurse or let the user pick additional folders
-- [ ] Replace the static placeholder in `LocalFilesContent` ([HomeScreen.kt:312-320](app/src/main/java/com/comicanything/reader/ui/home/HomeScreen.kt:312-320)) with a real list/grid bound to scan results, matching the Library tab's card style
+- [x] Add a runtime permission request flow in `MainActivity.kt` (API 33+: `READ_MEDIA_IMAGES`; API ≤32: `READ_EXTERNAL_STORAGE`; document the `MANAGE_EXTERNAL_STORAGE` special-permission flow already declared in the manifest, or drop it if unused)
+- [x] Add a "permission denied" / "grant access" state to the Local Files tab UI instead of failing silently
+- [x] Make `LocalFileRepository.scanStorageDirectories` scan more than the single hardcoded `/storage/emulated/0/Download` path (spec calls out `/sdcard/Download/` and `/storage/emulated/0/` broadly) — recurse or let the user pick additional folders
+- [x] Replace the static placeholder in `LocalFilesContent` ([HomeScreen.kt:312-320](app/src/main/java/com/comicanything/reader/ui/home/HomeScreen.kt:312-320)) with a real list/grid bound to scan results, matching the Library tab's card style
 
 ## Epic 2 — Core Page Rendering Engine ⬜
 *The critical gap — the reader currently shows a placeholder card, not actual comic pages. Nothing else in the reader matters until this exists.*
