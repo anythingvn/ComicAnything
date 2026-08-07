@@ -12,6 +12,8 @@ import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,7 +41,8 @@ data class ReaderUiState(
 
 class ReaderViewModel @JvmOverloads constructor(
     private val localRepo: LocalFileRepository = LocalFileRepository(),
-    private val driveRepo: GoogleDriveRepository = GoogleDriveRepository()
+    private val driveRepo: GoogleDriveRepository = GoogleDriveRepository(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -92,10 +95,12 @@ class ReaderViewModel @JvmOverloads constructor(
         )
         viewModelScope.launch {
             val source = try {
-                createPageSource(comic)
+                withContext(ioDispatcher) { createPageSource(comic) }
             } catch (e: UnsupportedFormatException) {
                 _uiState.value = _uiState.value.copy(pageLoadError = "This format isn't supported yet")
                 return@launch
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Failed to open comic")
                 return@launch

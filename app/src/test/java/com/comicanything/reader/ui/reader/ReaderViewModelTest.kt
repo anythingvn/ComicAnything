@@ -123,7 +123,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening a comic with an unsupported format sets an error and does not crash`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
         val comic = ComicItem(
             id = "1",
             title = "Unsupported Book",
@@ -142,7 +142,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
         val comic = ComicItem(
             id = "2",
             title = "Drive Book",
