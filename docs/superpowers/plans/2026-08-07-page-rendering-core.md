@@ -417,7 +417,7 @@ Add these test cases to the end of `app/src/test/java/com/comicanything/reader/u
     @Test
     fun `opening a comic with an unsupported format sets an error and does not crash`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
         val comic = ComicItem(
             id = "1",
             title = "Unsupported Book",
@@ -436,7 +436,7 @@ Add these test cases to the end of `app/src/test/java/com/comicanything/reader/u
     @Test
     fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
         val comic = ComicItem(
             id = "2",
             title = "Drive Book",
@@ -451,6 +451,8 @@ Add these test cases to the end of `app/src/test/java/com/comicanything/reader/u
         assertEquals("This format isn't supported yet", viewModel.uiState.value.pageLoadError)
     }
 ```
+
+`ReaderViewModel` now takes a third constructor parameter, `ioDispatcher` (added below) — pass `Dispatchers.Unconfined` in tests for the same reason `LocalFileRepository` does: `openComic` dispatches page-source creation onto this dispatcher, and a real `Dispatchers.IO` hop is a genuine async boundary `advanceUntilIdle()` can race past.
 
 Add `assertNull` to the existing `org.junit.Assert.*` imports at the top of the file if it isn't already imported (check first — Task 2 of the Epic 1 plan already added `assertNull` for the `closeComic` test, so it's likely already there).
 
@@ -473,6 +475,8 @@ import com.comicanything.reader.data.pagesource.PageBitmapCache
 import com.comicanything.reader.data.pagesource.PageDecodeException
 import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 ```
@@ -485,6 +489,16 @@ Add three fields to `ReaderUiState` (after `val isScanningLocal: Boolean = false
     val pageLoadError: String? = null,
     val isPageLoading: Boolean = false
 )
+```
+
+Add a third constructor parameter to `ReaderViewModel`, matching the existing `@JvmOverloads`-defaulted style — this is what makes the two new tests below able to substitute a test-friendly dispatcher, the same way `LocalFileRepository`'s `ioDispatcher` parameter already does:
+
+```kotlin
+class ReaderViewModel @JvmOverloads constructor(
+    private val localRepo: LocalFileRepository = LocalFileRepository(),
+    private val driveRepo: GoogleDriveRepository = GoogleDriveRepository(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) : ViewModel() {
 ```
 
 Add a private field to `ReaderViewModel`, right after the `uiState` declaration:
@@ -512,9 +526,14 @@ Replace the existing `openComic` function:
         )
         viewModelScope.launch {
             val source = try {
-                withContext(Dispatchers.IO) { createPageSource(comic) }
+                withContext(ioDispatcher) { createPageSource(comic) }
             } catch (e: UnsupportedFormatException) {
                 _uiState.value = _uiState.value.copy(pageLoadError = "This format isn't supported yet")
+                return@launch
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Failed to open comic")
                 return@launch
             }
             val cache = PageBitmapCache(source)
