@@ -1,0 +1,94 @@
+# ComicAnything - Project Task Tracker
+
+Epic → task breakdown of the work remaining to take ComicAnything from its
+current UI scaffold to the app described in
+[APP_FEATURES_AND_FUNCTIONS.md](APP_FEATURES_AND_FUNCTIONS.md).
+
+**Status legend:** ⬜ not started · 🟨 partial / needs rework · ✅ done
+
+**Current state (as of 2026-08-07):** Compose/Material 3 shell exists
+(Home tabs, Reader chrome, ViewModel, both repositories). The reader does
+not render actual pages yet, and there is no persistence layer. Epic 0
+(build system) is now verified working via a clean-room Docker build.
+Ordering below is dependency order, not just priority — do Epic 1 before
+anything that assumes the app can read files on a real device.
+
+---
+
+## Epic 0 — Build System Foundations ✅
+*Verified 2026-08-07 via a clean JDK17 + Android SDK 34 Docker container (no Android Studio, no host-installed SDK) — `./gradlew assembleDebug` → `BUILD SUCCESSFUL`, produced `app/build/outputs/apk/debug/app-debug.apk` (16.6MB).*
+
+- [x] Add Gradle Wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.properties`, `gradle-wrapper.jar`) so the project builds from the CLI, not just inside Android Studio — pulled from the official Gradle 8.4.0 release (matches AGP 8.2.2)
+- [x] Add `app/proguard-rules.pro` — referenced by `app/build.gradle.kts:27-28` (`release` build type) but the file doesn't exist; release builds will fail to configure
+- [x] Add launcher icon resources (`res/mipmap-*/ic_launcher.png` + round variant) — `AndroidManifest.xml:17-19` references `@mipmap/ic_launcher`/`ic_launcher_round` but no `mipmap` resource directory existed; generated for mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi (placeholder art — revisit in Epic 9 branding pass)
+- [x] Add `gradle.properties` with `android.useAndroidX=true` — **discovered during verification, not in the original list.** The project has AndroidX dependencies but no `gradle.properties` at all; build failed with `Configuration :app:debugRuntimeClasspath contains AndroidX dependencies, but android.useAndroidX property is not enabled` until this was added
+- [x] Run `./gradlew assembleDebug` and confirm a clean build succeeds end-to-end
+
+## Epic 1 — Runtime Permissions & Local Storage Wiring 🟨
+*Blocking for Epic 2/7 on-device: without granted permissions, local scanning silently returns only demo data.*
+
+- [ ] Add a runtime permission request flow in `MainActivity.kt` (API 33+: `READ_MEDIA_IMAGES`; API ≤32: `READ_EXTERNAL_STORAGE`; document the `MANAGE_EXTERNAL_STORAGE` special-permission flow already declared in the manifest, or drop it if unused)
+- [ ] Add a "permission denied" / "grant access" state to the Local Files tab UI instead of failing silently
+- [ ] Make `LocalFileRepository.scanStorageDirectories` scan more than the single hardcoded `/storage/emulated/0/Download` path (spec calls out `/sdcard/Download/` and `/storage/emulated/0/` broadly) — recurse or let the user pick additional folders
+- [ ] Replace the static placeholder in `LocalFilesContent` ([HomeScreen.kt:312-320](app/src/main/java/com/comicanything/reader/ui/home/HomeScreen.kt:312-320)) with a real list/grid bound to scan results, matching the Library tab's card style
+
+## Epic 2 — Core Page Rendering Engine ⬜
+*The critical gap — the reader currently shows a placeholder card, not actual comic pages. Nothing else in the reader matters until this exists.*
+
+- [ ] PDF page rendering using `android.graphics.pdf.PdfRenderer` (native API, no new dependency) — render page N to a `Bitmap` on a background thread
+- [ ] CBZ page extraction via `java.util.zip.ZipFile`/`ZipInputStream`, sorted naturally by filename, decoded to `Bitmap`
+- [ ] Page prefetch/LRU bitmap cache so paging forward/back doesn't re-decode every tap
+- [ ] Replace the placeholder `Card` in `ReaderScreen.kt:75-109` with the real rendered page (Coil `AsyncImage` or raw `Image(bitmap=...)`)
+- [ ] Make reading modes act on real pages: LTR/RTL page order, Webtoon continuous vertical scroll (`LazyColumn` of pages), Dual-page spread (two `Bitmap`s side by side)
+- [ ] Pinch-to-zoom gesture on the real page image (currently unimplemented — spec claims it, no code exists)
+- [ ] Apply color filter modes (Sepia/Night/AMOLED/High-Contrast) as a `ColorMatrix`/`BlendMode` over the real page instead of just tinting an empty background
+- [ ] Implement auto white-margin cropping: detect near-white border pixels on a decoded `Bitmap` and crop before display (currently just a UI toggle with no effect)
+
+## Epic 3 — Local Persistence Layer ⬜
+*Spec claims "all reading history, bookmarks, progress saved on-device using DataStore" — none of this exists; state is lost on process death.*
+
+- [ ] Add `androidx.datastore:datastore-preferences` dependency
+- [ ] Persist per-comic reading state (`currentPage`, `progressPercentage`, `lastReadTimestamp`) keyed by comic id
+- [ ] Persist favorites/bookmarks (currently `ComicItem.isFavorite` is toggled in `ReaderScreen.kt:134` but never saved)
+- [ ] On app launch, merge persisted state into freshly-scanned `ComicItem`s (scan gives you files; DataStore gives you progress) instead of relying on in-memory demo data
+- [ ] Verify progress survives an app kill + relaunch
+
+## Epic 4 — Google Drive Integration Completion 🟨
+*Repository has real Drive REST v3 querying, but it's unreachable from the UI.*
+
+- [ ] Add an API key input (settings screen or inline field) — `HomeScreen.kt:99` calls `viewModel.fetchDriveFolder(driveUrlInput)` with **no** `apiKey` argument, so `GoogleDriveRepository` always falls through to demo data (`GoogleDriveRepository.kt:78-91`)
+- [ ] Persist the API key locally (DataStore, from Epic 3) so the user enters it once
+- [ ] Implement on-demand streaming/caching of the actual Drive file bytes (currently only a `webContentLink` URL is stored — no download, no local cache, no offline read path)
+- [ ] Add error/empty states for an invalid folder ID, network failure, or missing/invalid API key (currently any failure just silently falls back to the one sample PDF)
+
+## Epic 5 — EPUB & MOBI Support ⬜
+*Formats declared in the enum and spec, zero implementation.*
+
+- [ ] Choose and integrate an EPUB parsing/rendering approach (e.g. a WebView-based reflow renderer, or a library such as Readium)
+- [ ] Build a reflowable text reader screen distinct from the paged-image `ReaderScreen` (EPUB isn't page-image based)
+- [ ] Decide MOBI scope: integrate a MOBI parser, or explicitly descope it from the spec/enum if not pursuing — don't leave it silently broken
+
+## Epic 6 — CBR (RAR) Support ⬜
+- [ ] Integrate a RAR-extraction library (e.g. `junrar`) — no zip-like stdlib option exists for RAR on Android
+- [ ] Reuse the CBZ page pipeline from Epic 2 once pages are extracted to a temp dir
+- [ ] If RAR licensing/size isn't worth it, formally descope CBR from `ComicFormat` and the spec instead of leaving a dead enum value
+
+## Epic 7 — Library/Home UX Completion 🟨
+- [ ] Wire up the search bar (spec's TopAppBar claims search; `HomeScreen.kt` topBar has no search field at all)
+- [ ] Add format filter chips (`[PDF]`, `[CBZ]`, `[EPUB]`) to filter the bookshelf grid
+- [ ] Add Grid vs List layout switcher (spec claims it; only grid exists)
+- [ ] Real cover thumbnails: render the first page (via Epic 2's PDF/CBZ pipeline) or load `coverUrl`/Drive `thumbnailLink` through Coil, replacing the static book icon in both grid and carousel cards
+- [ ] Confirm "Continue Reading" carousel resume tap opens the reader at the correct persisted page (depends on Epic 3)
+
+## Epic 8 — Testing & Quality ⬜
+- [ ] Unit tests for `LocalFileRepository` (format detection, empty-dir fallback)
+- [ ] Unit tests for `GoogleDriveRepository` (folder-ID extraction, JSON parsing, fallback behavior)
+- [ ] Unit tests for `ReaderViewModel` state transitions (`setPage` clamping, mode/filter toggles)
+- [ ] Instrumented Compose UI test for reader tap-zone navigation (left/right/center regions)
+- [ ] Manual QA pass on a physical device or emulator covering: local scan with real files, Drive folder with a real API key, all 4 reading modes, all 5 color filters
+
+## Epic 9 — Release Prep ⬜
+- [ ] Finalize app icon/branding assets (depends on Epic 0's launcher icon task)
+- [ ] Decide versioning strategy (currently hardcoded `versionCode = 1`, `versionName = "1.0.0"` in `app/build.gradle.kts:14-15`)
+- [ ] Configure signed release build (keystore, signing config) — release build type currently has no signing config at all
+- [ ] Verify the README's "Build & Install" steps work end-to-end on a clean checkout
