@@ -13,7 +13,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.ui.home.HomeScreen
 import com.comicanything.reader.ui.reader.ReaderScreen
 import com.comicanything.reader.ui.reader.ReaderViewModel
@@ -42,7 +41,7 @@ class MainActivity : ComponentActivity() {
                         ReaderScreen(
                             comic = state.activeComic!!,
                             viewModel = viewModel,
-                            onBack = { viewModel.openComic(null as ComicItem? ?: return@ReaderScreen) }
+                            onBack = { viewModel.closeComic() }
                         )
                     } else {
                         HomeScreen(

@@ -76,6 +76,10 @@ class ReaderViewModel @JvmOverloads constructor(
         )
     }
 
+    fun closeComic() {
+        _uiState.value = _uiState.value.copy(activeComic = null)
+    }
+
     fun setPage(page: Int) {
         val clamped = page.coerceIn(1, _uiState.value.totalPages)
         _uiState.value = _uiState.value.copy(currentPage = clamped)
