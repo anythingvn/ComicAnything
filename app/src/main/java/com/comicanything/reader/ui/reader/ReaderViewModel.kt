@@ -40,6 +40,12 @@ data class ReaderUiState(
     val isPageLoading: Boolean = false
 )
 
+sealed interface PageLoadState {
+    data object Loading : PageLoadState
+    data class Loaded(val bitmap: Bitmap) : PageLoadState
+    data object Failed : PageLoadState
+}
+
 class ReaderViewModel @JvmOverloads constructor(
     private val localRepo: LocalFileRepository = LocalFileRepository(),
     private val driveRepo: GoogleDriveRepository = GoogleDriveRepository(),
@@ -160,6 +166,15 @@ class ReaderViewModel @JvmOverloads constructor(
         val cache = pageCache ?: return
         viewModelScope.launch {
             loadPage(cache, clamped)
+        }
+    }
+
+    suspend fun loadPageBitmap(page: Int): PageLoadState {
+        val cache = pageCache ?: return PageLoadState.Failed
+        return try {
+            PageLoadState.Loaded(cache.getPage(page))
+        } catch (e: PageDecodeException) {
+            PageLoadState.Failed
         }
     }
 

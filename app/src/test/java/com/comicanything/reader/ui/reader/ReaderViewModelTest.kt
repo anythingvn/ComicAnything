@@ -156,4 +156,14 @@ class ReaderViewModelTest {
 
         assertEquals("This format isn't supported yet", viewModel.uiState.value.pageLoadError)
     }
+
+    @Test
+    fun `loadPageBitmap returns Failed when no comic is open`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+
+        val result = viewModel.loadPageBitmap(1)
+
+        assertEquals(PageLoadState.Failed, result)
+    }
 }
