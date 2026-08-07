@@ -15,6 +15,7 @@ import com.comicanything.reader.data.repository.LocalFileRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -83,7 +84,7 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun openComic(comic: ComicItem) {
-        pageCache?.close()
+        val previousCache = pageCache
         pageCache = null
         _uiState.value = _uiState.value.copy(
             activeComic = comic,
@@ -94,6 +95,9 @@ class ReaderViewModel @JvmOverloads constructor(
             pageLoadError = null
         )
         viewModelScope.launch {
+            withContext(NonCancellable) {
+                previousCache?.close()
+            }
             val source = try {
                 withContext(ioDispatcher) { createPageSource(comic) }
             } catch (e: UnsupportedFormatException) {
@@ -106,20 +110,42 @@ class ReaderViewModel @JvmOverloads constructor(
                 return@launch
             }
             val cache = PageBitmapCache(source)
+            val pageCount = cache.pageCount
+            if (pageCount <= 0) {
+                cache.close()
+                _uiState.value = _uiState.value.copy(pageLoadError = "This comic has no readable pages")
+                return@launch
+            }
             pageCache = cache
-            _uiState.value = _uiState.value.copy(totalPages = cache.pageCount)
-            loadPage(cache, _uiState.value.currentPage)
+            _uiState.value = _uiState.value.copy(totalPages = pageCount)
+            loadPage(cache, _uiState.value.currentPage.coerceIn(1, pageCount))
         }
     }
 
     fun closeComic() {
-        pageCache?.close()
+        val cacheToClose = pageCache
         pageCache = null
         _uiState.value = _uiState.value.copy(
             activeComic = null,
             currentPageBitmap = null,
             pageLoadError = null
         )
+        if (cacheToClose != null) {
+            viewModelScope.launch(NonCancellable) {
+                cacheToClose.close()
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        val cacheToClose = pageCache
+        pageCache = null
+        if (cacheToClose != null) {
+            viewModelScope.launch(NonCancellable) {
+                cacheToClose.close()
+            }
+        }
     }
 
     fun setPage(page: Int) {

@@ -32,5 +32,8 @@ class PageBitmapCache(
             }
     }
 
-    fun close() = source.close()
+    suspend fun close() = mutex.withLock {
+        source.close()
+        cache.clear()
+    }
 }
