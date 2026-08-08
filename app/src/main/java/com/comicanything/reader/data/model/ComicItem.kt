@@ -35,10 +35,10 @@ data class ComicItem(
     val source: ComicSource,
     val format: ComicFormat,
     val coverUrl: String? = null,
-    val totalPages: Int = 1,
+    var totalPages: Int = 1,
     var currentPage: Int = 1,
     var progressPercentage: Float = 0f,
-    val lastReadTimestamp: Long = System.currentTimeMillis(),
+    var lastReadTimestamp: Long = System.currentTimeMillis(),
     var isFavorite: Boolean = false,
     val folderName: String? = null
 )

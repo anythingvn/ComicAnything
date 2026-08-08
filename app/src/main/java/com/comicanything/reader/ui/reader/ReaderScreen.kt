@@ -76,7 +76,7 @@ fun ReaderScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { comic.isFavorite = !comic.isFavorite }) {
+                    IconButton(onClick = { viewModel.toggleFavorite(comic) }) {
                         Icon(
                             imageVector = if (comic.isFavorite) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             contentDescription = null,

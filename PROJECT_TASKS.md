@@ -47,14 +47,16 @@ anything that assumes the app can read files on a real device.
 - [ ] **Deferred:** Apply color filter modes (Sepia/Night/AMOLED/High-Contrast) as a `ColorMatrix`/`BlendMode` over the real page instead of just tinting an empty background
 - [ ] **Deferred:** Implement auto white-margin cropping: detect near-white border pixels on a decoded `Bitmap` and crop before display (currently just a UI toggle with no effect)
 
-## Epic 3 — Local Persistence Layer ⬜
-*Spec claims "all reading history, bookmarks, progress saved on-device using DataStore" — none of this exists; state is lost on process death.*
+## Epic 3 — Local Persistence Layer ✅
+*Spec claims "all reading history, bookmarks, progress saved on-device using DataStore" — this now exists; state survives process death.*
+*Verified 2026-08-08 end-to-end on the `comicanything_test` emulator: opened a real 11-page CBZ, paged forward to page 4, waited past the 1.5s debounce window, force-stopped and relaunched — the Library's "Continue Reading" card correctly showed "sample.cbz, Page 4/11" (the real page count, fixing the long-standing "Page N/1" bug). Reopened, paged to page 5, and immediately (well under 1s, before the debounce would fire) tapped back and force-stopped — page 5 still survived on relaunch, confirming `closeComic`'s immediate flush beats the debounce in a real quick-exit scenario. Tapped the favorite/bookmark icon, confirmed via the raw persisted DataStore file (`run-as` + `cat files/datastore/reading_progress.preferences_pb`) that `isFavorite` flipped to `true` and was written to disk immediately; force-stopped and relaunched, and the bookmark icon correctly rendered filled/amber on the fresh cold start. No crashes in `adb logcat` across the whole session. Regression pass (library scanning, permission gating, single-page reading mode, back navigation) all still working.*
+*Found during verification (pre-existing, not introduced by this epic): the favorite icon does not visually update within the same live reader session when tapped — `toggleFavorite` mutates `ComicItem.isFavorite` in place without emitting a new `_uiState` value, so Compose has no signal to recompose the icon. The underlying toggle and persistence are both correct (confirmed via the raw DataStore file and via a fresh relaunch rendering it correctly), but a user tapping the button mid-session sees no immediate feedback. This bug already existed in the original `ReaderScreen.kt:134`-style direct mutation before Epic 3 — worth a small follow-up fix (route the favorite flag through `_uiState` or wrap `ComicItem` fields in Compose state) but not blocking, since the actual persistence requirement this epic set out to build works correctly.*
 
-- [ ] Add `androidx.datastore:datastore-preferences` dependency
-- [ ] Persist per-comic reading state (`currentPage`, `progressPercentage`, `lastReadTimestamp`) keyed by comic id
-- [ ] Persist favorites/bookmarks (currently `ComicItem.isFavorite` is toggled in `ReaderScreen.kt:134` but never saved)
-- [ ] On app launch, merge persisted state into freshly-scanned `ComicItem`s (scan gives you files; DataStore gives you progress) instead of relying on in-memory demo data
-- [ ] Verify progress survives an app kill + relaunch
+- [x] Add `androidx.datastore:datastore-preferences` dependency
+- [x] Persist per-comic reading state (`currentPage`, `progressPercentage`, `lastReadTimestamp`) keyed by comic id
+- [x] Persist favorites/bookmarks (`ComicItem.isFavorite` is now saved via `ReadingProgressRepository` immediately on toggle)
+- [x] On app launch, merge persisted state into freshly-scanned `ComicItem`s (scan gives you files; DataStore gives you progress) instead of relying on in-memory demo data
+- [x] Verify progress survives an app kill + relaunch
 
 ## Epic 4 — Google Drive Integration Completion 🟨
 *Repository has real Drive REST v3 querying, but it's unreachable from the UI.*
