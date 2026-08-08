@@ -36,7 +36,7 @@ fun WebtoonReader(state: ReaderUiState, viewModel: ReaderViewModel) {
             .filterNotNull()
             .map { it + 1 }
             .distinctUntilChanged()
-            .collect { page -> viewModel.setPage(page) }
+            .collect { page -> viewModel.setCurrentPageIndicator(page) }
     }
 
     LazyColumn(

@@ -159,15 +159,18 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    fun setPage(page: Int) {
+    fun setCurrentPageIndicator(page: Int): Int {
         val clamped = page.coerceIn(1, _uiState.value.totalPages)
         _uiState.value = _uiState.value.copy(currentPage = clamped)
-
         _uiState.value.activeComic?.let { comic ->
             comic.currentPage = clamped
             comic.progressPercentage = clamped.toFloat() / _uiState.value.totalPages.toFloat()
         }
+        return clamped
+    }
 
+    fun setPage(page: Int) {
+        val clamped = setCurrentPageIndicator(page)
         val cache = pageCache ?: return
         viewModelScope.launch {
             loadPage(cache, clamped)
