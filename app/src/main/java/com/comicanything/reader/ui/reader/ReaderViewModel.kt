@@ -64,7 +64,7 @@ class ReaderViewModel @JvmOverloads constructor(
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
     private var pageCache: PageBitmapCache? = null
-    private var persistJob: Job? = null
+    private var debounceJob: Job? = null
 
     fun setPermissionGranted(granted: Boolean) {
         val wasGranted = _uiState.value.hasStoragePermission
@@ -145,35 +145,27 @@ class ReaderViewModel @JvmOverloads constructor(
                 return@launch
             }
             pageCache = cache
+            val resumePage = _uiState.value.currentPage.coerceIn(1, pageCount)
             _uiState.value = _uiState.value.copy(
                 totalPages = pageCount,
+                currentPage = resumePage,
                 pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
             )
             comic.totalPages = pageCount
+            comic.currentPage = resumePage
+            comic.progressPercentage = resumePage.toFloat() / pageCount.toFloat()
             persistProgress(comic)
-            loadPage(cache, _uiState.value.currentPage.coerceIn(1, pageCount))
+            loadPage(cache, resumePage)
         }
     }
 
     fun closeComic() {
-        val cacheToClose = pageCache
-        val comicToFlush = _uiState.value.activeComic
-        pageCache = null
+        flushAndTeardown()
         _uiState.value = _uiState.value.copy(
             activeComic = null,
             currentPageBitmap = null,
             pageLoadError = null
         )
-        if (comicToFlush != null) {
-            persistProgress(comicToFlush)
-        } else {
-            persistJob?.cancel()
-        }
-        if (cacheToClose != null) {
-            viewModelScope.launch(NonCancellable) {
-                cacheToClose.close()
-            }
-        }
     }
 
     fun toggleFavorite(comic: ComicItem) {
@@ -183,13 +175,26 @@ class ReaderViewModel @JvmOverloads constructor(
 
     override fun onCleared() {
         super.onCleared()
+        flushAndTeardown()
+    }
+
+    internal fun clearForTest() = onCleared()
+
+    /**
+     * Captures the active cache and comic, flushes (or cancels) any pending persistence, and
+     * closes the cache. Shared by [closeComic] and [onCleared] since both need the same
+     * capture-then-teardown sequence; [onCleared] additionally relies on the flush running under
+     * [NonCancellable] since viewModelScope's backing job is already cancelled by the time
+     * onCleared() is invoked (ViewModel.clear() cancels the scope before calling onCleared()).
+     */
+    private fun flushAndTeardown() {
         val cacheToClose = pageCache
         val comicToFlush = _uiState.value.activeComic
         pageCache = null
         if (comicToFlush != null) {
             persistProgress(comicToFlush)
         } else {
-            persistJob?.cancel()
+            debounceJob?.cancel()
         }
         if (cacheToClose != null) {
             viewModelScope.launch(NonCancellable) {
@@ -255,15 +260,15 @@ class ReaderViewModel @JvmOverloads constructor(
     )
 
     private fun persistProgress(comic: ComicItem) {
-        persistJob?.cancel()
-        persistJob = viewModelScope.launch {
+        debounceJob?.cancel()
+        viewModelScope.launch(NonCancellable) {
             progressRepo.save(comic.id, comic.toReadingProgress())
         }
     }
 
     private fun schedulePersist(comic: ComicItem) {
-        persistJob?.cancel()
-        persistJob = viewModelScope.launch {
+        debounceJob?.cancel()
+        debounceJob = viewModelScope.launch {
             delay(1_500)
             progressRepo.save(comic.id, comic.toReadingProgress())
         }

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.lifecycle.viewModelScope
 import com.comicanything.reader.MainDispatcherRule
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
@@ -13,6 +14,7 @@ import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -290,6 +292,12 @@ class ReaderViewModelTest {
             zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
             zos.write(byteArrayOf(1, 2, 3))
             zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("page2.jpg"))
+            zos.write(byteArrayOf(4, 5, 6))
+            zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("page3.jpg"))
+            zos.write(byteArrayOf(7, 8, 9))
+            zos.closeEntry()
         }
         val comic = ComicItem(
             id = "test-comic",
@@ -308,7 +316,7 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         val saved = progressRepo.getAll()["test-comic"]
-        assertEquals(1, saved?.totalPages)
+        assertEquals(3, saved?.totalPages)
     }
 
     @Test
@@ -394,6 +402,46 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         assertEquals(9, progressRepo.getAll()["close-comic"]?.currentPage)
+    }
+
+    @Test
+    fun `onCleared flushes pending debounced progress immediately`() = runTest {
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val comic = ComicItem(
+            id = "cleared-comic",
+            title = "Test",
+            pathOrUrl = "/fake/path.pdf",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.PDF,
+            totalPages = 10
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo
+        )
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        viewModel.setCurrentPageIndicator(9)
+        // Deliberately do NOT advance past the 1.5s debounce window before tearing down --
+        // this reproduces the real system-back-press path, where the process is torn down via
+        // Activity finish -> ViewModel.clear() -> onCleared(), with no closeComic() call.
+        //
+        // ViewModel.clear() is package-private (androidx.lifecycle), so it can't be invoked
+        // directly from this test; clearForTest() only exposes onCleared() itself. To still
+        // exercise the real hazard -- viewModelScope's backing Job already being cancelled by
+        // the time onCleared() runs -- cancel it explicitly first, mirroring what
+        // ViewModel.clear() does internally before it calls onCleared().
+        viewModel.viewModelScope.cancel()
+        viewModel.clearForTest()
+        advanceUntilIdle()
+
+        assertEquals(9, progressRepo.getAll()["cleared-comic"]?.currentPage)
     }
 
     @Test
