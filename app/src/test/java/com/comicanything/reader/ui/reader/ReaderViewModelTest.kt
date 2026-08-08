@@ -9,6 +9,7 @@ import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -46,6 +47,7 @@ class ReaderViewModelTest {
     @Before
     fun setUpProgressRepo() {
         val dataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "test-progress-${System.nanoTime()}.preferences_pb") }
         )
         progressRepo = ReadingProgressRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
@@ -216,5 +218,61 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         assertTrue(viewModel.uiState.value.pageSourceGeneration > initialGeneration)
+    }
+
+    @Test
+    fun `loadLocalLibrary merges persisted progress into scanned comics`() = runTest {
+        val comicFile = File(tempFolder.newFolder("Comics"), "batman.cbz")
+        comicFile.writeText("fake")
+        val comicId = comicFile.absolutePath.hashCode().toString()
+
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        progressRepo.save(
+            comicId,
+            ReadingProgress(
+                currentPage = 7,
+                totalPages = 30,
+                progressPercentage = 0.23f,
+                lastReadTimestamp = 1234567890L,
+                isFavorite = true
+            )
+        )
+
+        val localRepo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = localRepo,
+            progressRepo = progressRepo
+        )
+
+        viewModel.setPermissionGranted(true)
+        advanceUntilIdle()
+
+        val merged = viewModel.uiState.value.libraryComics.single()
+        assertEquals(comicId, merged.id)
+        assertEquals(7, merged.currentPage)
+        assertEquals(30, merged.totalPages)
+        assertEquals(0.23f, merged.progressPercentage)
+        assertEquals(1234567890L, merged.lastReadTimestamp)
+        assertTrue(merged.isFavorite)
+    }
+
+    @Test
+    fun `loadLocalLibrary leaves scan defaults untouched for a comic with no persisted progress`() = runTest {
+        File(tempFolder.newFolder("Comics"), "new_comic.cbz").writeText("fake")
+        val localRepo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo)
+
+        viewModel.setPermissionGranted(true)
+        advanceUntilIdle()
+
+        val comic = viewModel.uiState.value.libraryComics.single()
+        assertEquals(1, comic.currentPage)
+        assertEquals(1, comic.totalPages)
+        assertFalse(comic.isFavorite)
     }
 }

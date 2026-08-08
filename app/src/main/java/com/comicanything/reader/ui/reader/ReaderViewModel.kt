@@ -81,8 +81,20 @@ class ReaderViewModel @JvmOverloads constructor(
     fun loadLocalLibrary() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isScanningLocal = true)
-            val items = localRepo.scanStorageDirectories()
-            _uiState.value = _uiState.value.copy(libraryComics = items, isScanningLocal = false)
+            val scanned = localRepo.scanStorageDirectories()
+            val persisted = progressRepo.getAll()
+            val merged = scanned.map { comic ->
+                persisted[comic.id]?.let { progress ->
+                    comic.apply {
+                        currentPage = progress.currentPage
+                        totalPages = progress.totalPages
+                        progressPercentage = progress.progressPercentage
+                        lastReadTimestamp = progress.lastReadTimestamp
+                        isFavorite = progress.isFavorite
+                    }
+                } ?: comic
+            }
+            _uiState.value = _uiState.value.copy(libraryComics = merged, isScanningLocal = false)
         }
     }
 
