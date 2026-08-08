@@ -52,13 +52,14 @@ fun DualPageSpreadReader(state: ReaderUiState, viewModel: ReaderViewModel) {
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { offset ->
                     val width = size.width
+                    val (liveLeft, liveRight) = spreadPagesFor(currentState.currentPage, currentState.totalPages)
                     when {
                         offset.x < width * 0.35f -> {
-                            val target = (leftPage - 1).coerceAtLeast(1)
+                            val target = (liveLeft - 1).coerceAtLeast(1)
                             viewModel.setPage(target)
                         }
                         offset.x > width * 0.65f -> {
-                            val target = (rightPage ?: leftPage) + 1
+                            val target = (liveRight ?: liveLeft) + 1
                             if (target <= currentState.totalPages) viewModel.setPage(target)
                         }
                         else -> viewModel.toggleControls()
