@@ -166,4 +166,29 @@ class ReaderViewModelTest {
 
         assertEquals(PageLoadState.Failed, result)
     }
+
+    @Test
+    fun `pageSourceGeneration increments each time a comic successfully opens`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+        val comicFile = File(tempFolder.newFolder("Comics"), "test.cbz")
+        java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zos.write(byteArrayOf(1, 2, 3))
+            zos.closeEntry()
+        }
+        val comic = ComicItem(
+            id = "1",
+            title = "Test",
+            pathOrUrl = comicFile.absolutePath,
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+        val initialGeneration = viewModel.uiState.value.pageSourceGeneration
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.pageSourceGeneration > initialGeneration)
+    }
 }

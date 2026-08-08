@@ -49,7 +49,7 @@ fun WebtoonReader(state: ReaderUiState, viewModel: ReaderViewModel) {
     ) {
         items(state.totalPages) { index ->
             val page = index + 1
-            val pageState by produceState<PageLoadState>(initialValue = PageLoadState.Loading, key1 = page) {
+            val pageState by produceState<PageLoadState>(initialValue = PageLoadState.Loading, key1 = page, key2 = state.pageSourceGeneration) {
                 value = viewModel.loadPageBitmap(page)
             }
             when (val s = pageState) {

@@ -37,7 +37,8 @@ data class ReaderUiState(
     val isScanningLocal: Boolean = false,
     val currentPageBitmap: Bitmap? = null,
     val pageLoadError: String? = null,
-    val isPageLoading: Boolean = false
+    val isPageLoading: Boolean = false,
+    val pageSourceGeneration: Int = 0
 )
 
 sealed interface PageLoadState {
@@ -98,7 +99,8 @@ class ReaderViewModel @JvmOverloads constructor(
             totalPages = if (comic.totalPages > 0) comic.totalPages else 48,
             isControlsVisible = true,
             currentPageBitmap = null,
-            pageLoadError = null
+            pageLoadError = null,
+            pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
         )
         viewModelScope.launch {
             withContext(NonCancellable) {
@@ -123,7 +125,10 @@ class ReaderViewModel @JvmOverloads constructor(
                 return@launch
             }
             pageCache = cache
-            _uiState.value = _uiState.value.copy(totalPages = pageCount)
+            _uiState.value = _uiState.value.copy(
+                totalPages = pageCount,
+                pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
+            )
             loadPage(cache, _uiState.value.currentPage.coerceIn(1, pageCount))
         }
     }
