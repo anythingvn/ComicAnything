@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -351,8 +352,14 @@ class ReaderViewModelTest {
         assertNull(progressRepo.getAll()["debounce-comic"]?.let { if (it.currentPage == 4) it else null })
 
         // The final millisecond crosses the exact 1_500ms boundary -- now it must have written.
+        // Use runCurrent() (not advanceUntilIdle()) here: advanceUntilIdle() would jump the
+        // virtual clock forward to whatever time the next task is scheduled for, no matter how
+        // far out, so it would still catch a job scheduled for e.g. 2_000ms and mask an upward
+        // drift in the debounce delay. runCurrent() only runs tasks already due at the current
+        // virtual time, so it proves the job was scheduled to fire by exactly 1_500ms -- not
+        // merely that it eventually fires at some later time.
         advanceTimeBy(1)
-        advanceUntilIdle()
+        runCurrent()
 
         assertEquals(4, progressRepo.getAll()["debounce-comic"]?.currentPage)
     }
