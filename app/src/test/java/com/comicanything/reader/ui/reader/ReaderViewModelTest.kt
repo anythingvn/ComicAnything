@@ -13,6 +13,7 @@ import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -274,5 +275,110 @@ class ReaderViewModelTest {
         assertEquals(1, comic.currentPage)
         assertEquals(1, comic.totalPages)
         assertFalse(comic.isFavorite)
+    }
+
+    @Test
+    fun `opening a comic persists its real page count immediately`() = runTest {
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val comicFile = File(tempFolder.newFolder("Comics"), "test.cbz")
+        java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zos.write(byteArrayOf(1, 2, 3))
+            zos.closeEntry()
+        }
+        val comic = ComicItem(
+            id = "test-comic",
+            title = "Test",
+            pathOrUrl = comicFile.absolutePath,
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        val saved = progressRepo.getAll()["test-comic"]
+        assertEquals(1, saved?.totalPages)
+    }
+
+    @Test
+    fun `setCurrentPageIndicator debounces persistence, only writing after 1500ms of no further changes`() = runTest {
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val comic = ComicItem(
+            id = "debounce-comic",
+            title = "Test",
+            pathOrUrl = "/fake/path.pdf",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.PDF,
+            totalPages = 10
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo
+        )
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        // Rapid page changes, simulating a fast scroll -- none should individually persist yet.
+        viewModel.setCurrentPageIndicator(2)
+        advanceTimeBy(500)
+        viewModel.setCurrentPageIndicator(3)
+        advanceTimeBy(500)
+        viewModel.setCurrentPageIndicator(4)
+        advanceTimeBy(500)
+
+        assertNull(progressRepo.getAll()["debounce-comic"]?.let { if (it.currentPage == 4) it else null })
+
+        // Let the debounce window elapse with no further changes.
+        advanceTimeBy(1_500)
+        advanceUntilIdle()
+
+        assertEquals(4, progressRepo.getAll()["debounce-comic"]?.currentPage)
+    }
+
+    @Test
+    fun `closeComic flushes pending debounced progress immediately`() = runTest {
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val comic = ComicItem(
+            id = "close-comic",
+            title = "Test",
+            pathOrUrl = "/fake/path.pdf",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.PDF,
+            totalPages = 10
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo
+        )
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        viewModel.setCurrentPageIndicator(9)
+        // Deliberately do NOT advance past the 1.5s debounce window.
+
+        viewModel.closeComic()
+        advanceUntilIdle()
+
+        assertEquals(9, progressRepo.getAll()["close-comic"]?.currentPage)
     }
 }

@@ -13,11 +13,14 @@ import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,6 +64,7 @@ class ReaderViewModel @JvmOverloads constructor(
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
     private var pageCache: PageBitmapCache? = null
+    private var persistJob: Job? = null
 
     fun setPermissionGranted(granted: Boolean) {
         val wasGranted = _uiState.value.hasStoragePermission
@@ -145,18 +149,26 @@ class ReaderViewModel @JvmOverloads constructor(
                 totalPages = pageCount,
                 pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
             )
+            comic.totalPages = pageCount
+            persistProgress(comic)
             loadPage(cache, _uiState.value.currentPage.coerceIn(1, pageCount))
         }
     }
 
     fun closeComic() {
         val cacheToClose = pageCache
+        val comicToFlush = _uiState.value.activeComic
         pageCache = null
         _uiState.value = _uiState.value.copy(
             activeComic = null,
             currentPageBitmap = null,
             pageLoadError = null
         )
+        if (comicToFlush != null) {
+            persistProgress(comicToFlush)
+        } else {
+            persistJob?.cancel()
+        }
         if (cacheToClose != null) {
             viewModelScope.launch(NonCancellable) {
                 cacheToClose.close()
@@ -167,7 +179,13 @@ class ReaderViewModel @JvmOverloads constructor(
     override fun onCleared() {
         super.onCleared()
         val cacheToClose = pageCache
+        val comicToFlush = _uiState.value.activeComic
         pageCache = null
+        if (comicToFlush != null) {
+            persistProgress(comicToFlush)
+        } else {
+            persistJob?.cancel()
+        }
         if (cacheToClose != null) {
             viewModelScope.launch(NonCancellable) {
                 cacheToClose.close()
@@ -181,6 +199,8 @@ class ReaderViewModel @JvmOverloads constructor(
         _uiState.value.activeComic?.let { comic ->
             comic.currentPage = clamped
             comic.progressPercentage = clamped.toFloat() / _uiState.value.totalPages.toFloat()
+            comic.lastReadTimestamp = System.currentTimeMillis()
+            schedulePersist(comic)
         }
         return clamped
     }
@@ -219,6 +239,29 @@ class ReaderViewModel @JvmOverloads constructor(
             )
         }
         cache.prefetch(listOf(page - 1, page + 1))
+    }
+
+    private fun ComicItem.toReadingProgress() = ReadingProgress(
+        currentPage = currentPage,
+        totalPages = totalPages,
+        progressPercentage = progressPercentage,
+        lastReadTimestamp = lastReadTimestamp,
+        isFavorite = isFavorite
+    )
+
+    private fun persistProgress(comic: ComicItem) {
+        persistJob?.cancel()
+        persistJob = viewModelScope.launch {
+            progressRepo.save(comic.id, comic.toReadingProgress())
+        }
+    }
+
+    private fun schedulePersist(comic: ComicItem) {
+        persistJob?.cancel()
+        persistJob = viewModelScope.launch {
+            delay(1_500)
+            progressRepo.save(comic.id, comic.toReadingProgress())
+        }
     }
 
     fun toggleControls() {
