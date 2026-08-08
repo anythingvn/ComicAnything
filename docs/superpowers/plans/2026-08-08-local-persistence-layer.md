@@ -320,7 +320,25 @@ class ReaderViewModelTest {
 
 Nothing in this task's tests calls into `Application`'s Android-framework behavior beyond construction, since `progressRepo` isn't exercised by any existing test yet (Task 1's constructor variant that takes a `DataStore` directly, not a `Context`, is what Task 3+'s new tests will use — see Task 3).
 
-Update every `ReaderViewModel(...)` construction in the file to add `application = fakeApplication` to its argument list. For example:
+`ReaderViewModel`'s new `progressRepo` parameter defaults to `ReadingProgressRepository(application)` — the `Context`-based constructor, which eagerly resolves `context.readingProgressDataStore` (a `by preferencesDataStore(...)` delegate) and transitively calls `Context.getApplicationContext()`. That's an unmocked Android stub-jar method in these plain JVM tests, so if any test lets `progressRepo` fall back to its default, construction throws `RuntimeException: Method getApplicationContext in android.content.ContextWrapper not mocked`. Every test must therefore also pass an explicit `progressRepo`, built the same temp-file-backed way Task 1's own `ReadingProgressRepositoryTest.kt` does (no `Context` involved, so no stub-jar call).
+
+Add this field near `fakeApplication`, and a `@Before` method to populate it (JUnit's `TestRule` ordering guarantees `tempFolder.root` exists before `@Before` methods run):
+
+```kotlin
+    private lateinit var progressRepo: ReadingProgressRepository
+
+    @Before
+    fun setUpProgressRepo() {
+        val dataStore = PreferenceDataStoreFactory.create(
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        progressRepo = ReadingProgressRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
+    }
+```
+
+This needs four more imports: `androidx.datastore.core.DataStore`, `androidx.datastore.preferences.core.Preferences`, `androidx.datastore.preferences.core.PreferenceDataStoreFactory`, `com.comicanything.reader.data.repository.ReadingProgressRepository`, plus `org.junit.Before`.
+
+Update every `ReaderViewModel(...)` construction in the file to add both `application = fakeApplication` and `progressRepo = progressRepo` to its argument list. For example:
 
 ```kotlin
 val viewModel = ReaderViewModel(localRepo = repo)
@@ -329,10 +347,10 @@ val viewModel = ReaderViewModel(localRepo = repo)
 becomes:
 
 ```kotlin
-val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo)
+val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
 ```
 
-Apply this same one-argument addition to all 10 `ReaderViewModel(...)` call sites in the file — every one just needs `application = fakeApplication` added, nothing else about any test's logic changes.
+Apply this same two-argument addition to all 10 `ReaderViewModel(...)` call sites in the file — nothing else about any test's logic changes.
 
 - [ ] **Step 4: Run the full test suite**
 
