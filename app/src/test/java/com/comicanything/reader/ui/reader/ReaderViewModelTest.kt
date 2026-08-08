@@ -104,7 +104,7 @@ class ReaderViewModelTest {
     @Test
     fun `closeComic clears the active comic`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
         val comic = ComicItem(
             id = "1",
             title = "Test Comic",
@@ -113,9 +113,11 @@ class ReaderViewModelTest {
             format = ComicFormat.PDF
         )
         viewModel.openComic(comic)
+        advanceUntilIdle()
         assertEquals(comic, viewModel.uiState.value.activeComic)
 
         viewModel.closeComic()
+        advanceUntilIdle()
 
         assertNull(viewModel.uiState.value.activeComic)
     }
