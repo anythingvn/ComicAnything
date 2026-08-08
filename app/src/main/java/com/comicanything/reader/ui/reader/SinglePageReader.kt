@@ -70,8 +70,15 @@ fun SinglePageReader(
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 4f)
-                    offsetX += pan.x
-                    offsetY += pan.y
+                    if (scale > 1f) {
+                        val maxX = size.width * (scale - 1f) / 2f
+                        val maxY = size.height * (scale - 1f) / 2f
+                        offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                        offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                    } else {
+                        offsetX = 0f
+                        offsetY = 0f
+                    }
                 }
             },
         contentAlignment = Alignment.Center

@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +35,7 @@ fun spreadPagesFor(currentPage: Int, totalPages: Int): Pair<Int, Int?> {
 @Composable
 fun DualPageSpreadReader(state: ReaderUiState, viewModel: ReaderViewModel) {
     val (leftPage, rightPage) = spreadPagesFor(state.currentPage, state.totalPages)
+    val currentState by rememberUpdatedState(state)
 
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -47,13 +49,7 @@ fun DualPageSpreadReader(state: ReaderUiState, viewModel: ReaderViewModel) {
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer(
-                scaleX = scale,
-                scaleY = scale,
-                translationX = offsetX,
-                translationY = offsetY
-            )
-            .pointerInput(state.currentPage) {
+            .pointerInput(Unit) {
                 detectTapGestures(onTap = { offset ->
                     val width = size.width
                     when {
@@ -63,7 +59,7 @@ fun DualPageSpreadReader(state: ReaderUiState, viewModel: ReaderViewModel) {
                         }
                         offset.x > width * 0.65f -> {
                             val target = (rightPage ?: leftPage) + 1
-                            if (target <= state.totalPages) viewModel.setPage(target)
+                            if (target <= currentState.totalPages) viewModel.setPage(target)
                         }
                         else -> viewModel.toggleControls()
                     }
@@ -72,21 +68,39 @@ fun DualPageSpreadReader(state: ReaderUiState, viewModel: ReaderViewModel) {
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 4f)
-                    offsetX += pan.x
-                    offsetY += pan.y
+                    if (scale > 1f) {
+                        val maxX = size.width * (scale - 1f) / 2f
+                        val maxY = size.height * (scale - 1f) / 2f
+                        offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                        offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                    } else {
+                        offsetX = 0f
+                        offsetY = 0f
+                    }
                 }
             }
     ) {
-        SpreadPageSlot(page = leftPage, viewModel = viewModel, modifier = Modifier.weight(1f))
-        if (rightPage != null) {
-            SpreadPageSlot(page = rightPage, viewModel = viewModel, modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    translationX = offsetX,
+                    translationY = offsetY
+                )
+        ) {
+            SpreadPageSlot(page = leftPage, generation = state.pageSourceGeneration, viewModel = viewModel, modifier = Modifier.weight(1f))
+            if (rightPage != null) {
+                SpreadPageSlot(page = rightPage, generation = state.pageSourceGeneration, viewModel = viewModel, modifier = Modifier.weight(1f))
+            }
         }
     }
 }
 
 @Composable
-fun SpreadPageSlot(page: Int, viewModel: ReaderViewModel, modifier: Modifier = Modifier) {
-    val pageState by produceState<PageLoadState>(initialValue = PageLoadState.Loading, key1 = page) {
+fun SpreadPageSlot(page: Int, generation: Int, viewModel: ReaderViewModel, modifier: Modifier = Modifier) {
+    val pageState by produceState<PageLoadState>(initialValue = PageLoadState.Loading, key1 = page, key2 = generation) {
         value = viewModel.loadPageBitmap(page)
     }
     when (val s = pageState) {
