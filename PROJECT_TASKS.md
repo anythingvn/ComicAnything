@@ -54,7 +54,7 @@ anything that assumes the app can read files on a real device.
 
 - [x] Add `androidx.datastore:datastore-preferences` dependency
 - [x] Persist per-comic reading state (`currentPage`, `progressPercentage`, `lastReadTimestamp`) keyed by comic id
-- [x] Persist favorites/bookmarks (currently `ComicItem.isFavorite` is toggled in `ReaderScreen.kt:134` but never saved)
+- [x] Persist favorites/bookmarks (`ComicItem.isFavorite` is now saved via `ReadingProgressRepository` immediately on toggle)
 - [x] On app launch, merge persisted state into freshly-scanned `ComicItem`s (scan gives you files; DataStore gives you progress) instead of relying on in-memory demo data
 - [x] Verify progress survives an app kill + relaunch
 
