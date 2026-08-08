@@ -343,8 +343,15 @@ class ReaderViewModelTest {
 
         assertNull(progressRepo.getAll()["debounce-comic"]?.let { if (it.currentPage == 4) it else null })
 
-        // Let the debounce window elapse with no further changes.
-        advanceTimeBy(1_500)
+        // One tick short of the debounce window since the last change: still nothing written.
+        // (500 already elapsed above, so 999 more brings the total since setCurrentPageIndicator(4) to 1_499ms.)
+        // Note: deliberately no advanceUntilIdle() here -- that would run tasks regardless of
+        // their scheduled time and defeat the point of stopping just short of the boundary.
+        advanceTimeBy(999)
+        assertNull(progressRepo.getAll()["debounce-comic"]?.let { if (it.currentPage == 4) it else null })
+
+        // The final millisecond crosses the exact 1_500ms boundary -- now it must have written.
+        advanceTimeBy(1)
         advanceUntilIdle()
 
         assertEquals(4, progressRepo.getAll()["debounce-comic"]?.currentPage)
