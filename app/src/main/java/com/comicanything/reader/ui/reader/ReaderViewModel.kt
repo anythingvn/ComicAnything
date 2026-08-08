@@ -176,6 +176,11 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    fun toggleFavorite(comic: ComicItem) {
+        comic.isFavorite = !comic.isFavorite
+        persistProgress(comic)
+    }
+
     override fun onCleared() {
         super.onCleared()
         val cacheToClose = pageCache

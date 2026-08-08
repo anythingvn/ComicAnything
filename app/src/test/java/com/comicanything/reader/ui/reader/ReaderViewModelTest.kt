@@ -395,4 +395,37 @@ class ReaderViewModelTest {
 
         assertEquals(9, progressRepo.getAll()["close-comic"]?.currentPage)
     }
+
+    @Test
+    fun `toggleFavorite flips isFavorite and persists immediately`() = runTest {
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val comic = ComicItem(
+            id = "fav-comic",
+            title = "Test",
+            pathOrUrl = "/fake/path.pdf",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.PDF
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo
+        )
+
+        viewModel.toggleFavorite(comic)
+        advanceUntilIdle()
+
+        assertTrue(comic.isFavorite)
+        assertEquals(true, progressRepo.getAll()["fav-comic"]?.isFavorite)
+
+        viewModel.toggleFavorite(comic)
+        advanceUntilIdle()
+
+        assertFalse(comic.isFavorite)
+        assertEquals(false, progressRepo.getAll()["fav-comic"]?.isFavorite)
+    }
 }
