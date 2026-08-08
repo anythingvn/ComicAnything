@@ -1,10 +1,15 @@
 package com.comicanything.reader.ui.reader
 
+import android.app.Application
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.comicanything.reader.MainDispatcherRule
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -13,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -21,17 +27,35 @@ import java.io.File
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReaderViewModelTest {
 
+    private val fakeApplication = Application()
+
+    // ReaderViewModel's default `progressRepo` argument constructs a ReadingProgressRepository
+    // against the real Context.readingProgressDataStore delegate, which calls
+    // Context.getApplicationContext() -- an Android stub-jar method that throws "not mocked" in
+    // plain JVM unit tests (no Robolectric). So every ReaderViewModel(...) below passes this
+    // temp-file-backed instance explicitly instead of relying on the default, matching the
+    // pattern already used in ReadingProgressRepositoryTest.
+    private lateinit var progressRepo: ReadingProgressRepository
+
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
     @get:Rule
     val tempFolder = TemporaryFolder()
 
+    @Before
+    fun setUpProgressRepo() {
+        val dataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            produceFile = { File(tempFolder.root, "test-progress-${System.nanoTime()}.preferences_pb") }
+        )
+        progressRepo = ReadingProgressRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
+    }
+
     @Test
     fun `granting permission after being denied triggers a library load`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
 
         assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
 
@@ -46,7 +70,7 @@ class ReaderViewModelTest {
     fun `revoking permission clears the library`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
         assertEquals(1, viewModel.uiState.value.libraryComics.size)
@@ -61,7 +85,7 @@ class ReaderViewModelTest {
     @Test
     fun `granting permission when already granted does not reload`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
 
@@ -75,7 +99,7 @@ class ReaderViewModelTest {
     @Test
     fun `refreshLibrary re-scans and picks up newly added files when permission is granted`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
 
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
@@ -92,7 +116,7 @@ class ReaderViewModelTest {
     fun `refreshLibrary is a no-op when permission has never been granted`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
 
         viewModel.refreshLibrary()
         advanceUntilIdle()
@@ -104,7 +128,7 @@ class ReaderViewModelTest {
     @Test
     fun `closeComic clears the active comic`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
         val comic = ComicItem(
             id = "1",
             title = "Test Comic",
@@ -125,7 +149,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening a comic with an unsupported format sets an error and does not crash`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
         val comic = ComicItem(
             id = "1",
             title = "Unsupported Book",
@@ -144,7 +168,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
         val comic = ComicItem(
             id = "2",
             title = "Drive Book",
@@ -162,7 +186,7 @@ class ReaderViewModelTest {
     @Test
     fun `loadPageBitmap returns Failed when no comic is open`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
 
         val result = viewModel.loadPageBitmap(1)
 
@@ -172,7 +196,7 @@ class ReaderViewModelTest {
     @Test
     fun `pageSourceGeneration increments each time a comic successfully opens`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(localRepo = repo, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
         val comicFile = File(tempFolder.newFolder("Comics"), "test.cbz")
         java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
             zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))

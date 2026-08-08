@@ -1,7 +1,8 @@
 package com.comicanything.reader.ui.reader
 
+import android.app.Application
 import android.graphics.Bitmap
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.comicanything.reader.data.model.ColorFilterMode
 import com.comicanything.reader.data.model.ComicItem
@@ -12,6 +13,7 @@ import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -48,10 +50,12 @@ sealed interface PageLoadState {
 }
 
 class ReaderViewModel @JvmOverloads constructor(
+    application: Application,
     private val localRepo: LocalFileRepository = LocalFileRepository(),
     private val driveRepo: GoogleDriveRepository = GoogleDriveRepository(),
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-) : ViewModel() {
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application)
+) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
