@@ -330,13 +330,16 @@ Add this field near `fakeApplication`, and a `@Before` method to populate it (JU
     @Before
     fun setUpProgressRepo() {
         val dataStore = PreferenceDataStoreFactory.create(
+            scope = CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
         )
         progressRepo = ReadingProgressRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
     }
 ```
 
-This needs four more imports: `androidx.datastore.core.DataStore`, `androidx.datastore.preferences.core.Preferences`, `androidx.datastore.preferences.core.PreferenceDataStoreFactory`, `com.comicanything.reader.data.repository.ReadingProgressRepository`, plus `org.junit.Before`.
+The explicit `scope = CoroutineScope(Dispatchers.Unconfined)` is required, not optional: `PreferenceDataStoreFactory.create(...)`'s default `scope` is `CoroutineScope(Dispatchers.IO + SupervisorJob())` — a real background scope, independent of the `ioDispatcher` passed to `ReadingProgressRepository`. Once a later task (Task 3) starts calling `progressRepo.getAll()`/`.save()` from inside `viewModelScope.launch { ... }`, `advanceUntilIdle()` only pumps `runTest`'s own `TestCoroutineScheduler` — it does not wait for that separate real-IO scope, so the DataStore round trip races the assertion and intermittently loses. Passing `Dispatchers.Unconfined` as the scope keeps DataStore's internal actor on the same synchronous timeline as the rest of the test. This needs five imports: `androidx.datastore.core.DataStore`, `androidx.datastore.preferences.core.Preferences`, `androidx.datastore.preferences.core.PreferenceDataStoreFactory`, `com.comicanything.reader.data.repository.ReadingProgressRepository`, `kotlinx.coroutines.CoroutineScope`, plus `org.junit.Before`.
+
+**Every other `PreferenceDataStoreFactory.create(...)` call added in Tasks 3-5's own test bodies below must also pass this same `scope = CoroutineScope(Dispatchers.Unconfined)` parameter, for the identical reason** — each of those tests exercises `progressRepo` from inside `viewModelScope.launch`, so each needs its own DataStore's internal actor pinned to the test's synchronous timeline.
 
 Update every `ReaderViewModel(...)` construction in the file to add both `application = fakeApplication` and `progressRepo = progressRepo` to its argument list. For example:
 
@@ -400,6 +403,7 @@ Add this test case to `app/src/test/java/com/comicanything/reader/ui/reader/Read
         val comicId = comicFile.absolutePath.hashCode().toString()
 
         val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
         )
         val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
@@ -522,6 +526,7 @@ Add these test cases to `app/src/test/java/com/comicanything/reader/ui/reader/Re
     @Test
     fun `opening a comic persists its real page count immediately`() = runTest {
         val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
         )
         val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
@@ -554,6 +559,7 @@ Add these test cases to `app/src/test/java/com/comicanything/reader/ui/reader/Re
     @Test
     fun `setCurrentPageIndicator debounces persistence, only writing after 1500ms of no further changes`() = runTest {
         val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
         )
         val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
@@ -593,6 +599,7 @@ Add these test cases to `app/src/test/java/com/comicanything/reader/ui/reader/Re
     @Test
     fun `closeComic flushes pending debounced progress immediately`() = runTest {
         val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
         )
         val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
@@ -805,6 +812,7 @@ Add this test case to `app/src/test/java/com/comicanything/reader/ui/reader/Read
     @Test
     fun `toggleFavorite flips isFavorite and persists immediately`() = runTest {
         val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
         )
         val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
