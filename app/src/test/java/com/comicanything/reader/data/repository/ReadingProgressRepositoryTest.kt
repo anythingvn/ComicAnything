@@ -79,4 +79,25 @@ class ReadingProgressRepositoryTest {
         assertEquals(1, result.size)
         assertEquals(ReadingProgress(5, 10, 0.5f, 2000L, true), result["comic-1"])
     }
+
+    @Test
+    fun `getAll degrades to an empty map instead of throwing when the store file is corrupted`() = runTest {
+        // Write bytes that are not valid serialized Preferences into the backing file before any
+        // DataStore has read it, simulating on-disk corruption (e.g. a truncated write from a
+        // previous crash). No corruptionHandler is configured on this factory-created DataStore
+        // (unlike the production `readingProgressDataStore` delegate), so this specifically
+        // exercises the repository's own IOException guard around `dataStore.data`, per the
+        // design spec's promise that "a corrupt or missing value degrades to an empty map rather
+        // than crashing or throwing."
+        val corruptFile = File(tempFolder.root, "corrupt-${System.nanoTime()}.preferences_pb")
+        corruptFile.writeBytes(byteArrayOf(-1, 0, 18, 52, 86, 120, 9, 9, 9))
+        val corruptDataStore = PreferenceDataStoreFactory.create(
+            produceFile = { corruptFile }
+        )
+        val repo = ReadingProgressRepository(corruptDataStore, ioDispatcher = Dispatchers.Unconfined)
+
+        val result = repo.getAll()
+
+        assertTrue(result.isEmpty())
+    }
 }

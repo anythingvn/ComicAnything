@@ -2,8 +2,10 @@ package com.comicanything.reader.data.repository
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
@@ -13,6 +15,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 data class ReadingProgress(
     val currentPage: Int,
@@ -22,7 +25,10 @@ data class ReadingProgress(
     val isFavorite: Boolean
 )
 
-private val Context.readingProgressDataStore: DataStore<Preferences> by preferencesDataStore(name = "reading_progress")
+private val Context.readingProgressDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "reading_progress",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }
+)
 
 class ReadingProgressRepository(
     private val dataStore: DataStore<Preferences>,
@@ -36,15 +42,25 @@ class ReadingProgressRepository(
         this(context.readingProgressDataStore, ioDispatcher)
 
     suspend fun getAll(): Map<String, ReadingProgress> = withContext(ioDispatcher) {
-        val json = dataStore.data.first()[PROGRESS_KEY] ?: return@withContext emptyMap()
-        decode(json)
+        try {
+            val json = dataStore.data.first()[PROGRESS_KEY] ?: return@withContext emptyMap()
+            decode(json)
+        } catch (e: IOException) {
+            emptyMap()
+        }
     }
 
     suspend fun save(comicId: String, progress: ReadingProgress) = withContext(ioDispatcher) {
-        dataStore.edit { prefs ->
-            val current = prefs[PROGRESS_KEY]?.let { decode(it) } ?: emptyMap()
-            val updated = current + (comicId to progress)
-            prefs[PROGRESS_KEY] = Gson().toJson(updated)
+        try {
+            dataStore.edit { prefs ->
+                val current = prefs[PROGRESS_KEY]?.let { decode(it) } ?: emptyMap()
+                val updated = current + (comicId to progress)
+                prefs[PROGRESS_KEY] = Gson().toJson(updated)
+            }
+            Unit
+        } catch (e: IOException) {
+            // A failed write just means that write didn't happen -- never surface a
+            // persistence failure to the UI.
         }
     }
 
