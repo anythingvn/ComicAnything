@@ -42,7 +42,7 @@ anything that assumes the app can read files on a real device.
 - [x] Page prefetch/LRU bitmap cache so paging forward/back doesn't re-decode every tap
 - [x] Replace the placeholder `Card` in `ReaderScreen.kt:75-109` with the real rendered page (Coil `AsyncImage` or raw `Image(bitmap=...)`)
 - [x] Make reading modes act on real pages: LTR/RTL page order, Webtoon continuous vertical scroll (`LazyColumn` of pages), Dual-page spread (two `Bitmap`s side by side)
-- [x] Pinch-to-zoom gesture on the real page image (currently unimplemented — spec claims it, no code exists)
+- [x] Pinch-to-zoom gesture on the real page image
 - [ ] Apply color filter modes (Sepia/Night/AMOLED/High-Contrast) as a `ColorMatrix`/`BlendMode` over the real page instead of just tinting an empty background
 - [ ] Implement auto white-margin cropping: detect near-white border pixels on a decoded `Bitmap` and crop before display (currently just a UI toggle with no effect)
 
