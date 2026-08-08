@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Min SDK 24, target/compile SDK 34 (`app/build.gradle.kts`)
-- Kotlin 1.9.22, one new production dependency: `androidx.datastore:datastore-preferences:1.0.0`
+- Kotlin 1.9.22, one new production dependency: `androidx.datastore:datastore-preferences:1.1.1` (not `1.0.0` — that version has a Windows-specific file-rename bug that throws `IOException: Unable to rename ... multiple instances of DataStore` on a file's second write; confirmed during Task 1 implementation that `1.1.1` resolves it with no other regressions)
 - No mocking library — tests use real objects (temp-file-backed DataStore, real `ComicItem`s), not mocks
 - Existing package root: `com.comicanything.reader`
 - Google Drive comics are out of scope (Epic 4 hasn't given them anything to persist progress against yet)
@@ -34,8 +34,10 @@
 In `app/build.gradle.kts`, in the `dependencies { }` block, add this line next to the existing `implementation("com.google.code.gson:gson:2.10.1")`:
 
 ```kotlin
-implementation("androidx.datastore:datastore-preferences:1.0.0")
+implementation("androidx.datastore:datastore-preferences:1.1.1")
 ```
+
+(Use `1.1.1`, not `1.0.0` — `1.0.0` has a Windows-specific bug in `SingleProcessDataStore`'s file-rename logic that throws `IOException: Unable to rename ... This likely means that there are multiple instances of DataStore for this file` on a file's second write, even with only one `DataStore` instance ever created. This will surface in Step 5 below if you use `1.0.0`.)
 
 - [ ] **Step 2: Write the failing tests**
 
