@@ -689,4 +689,77 @@ class ReaderViewModelTest {
         assertFalse(persisted.isConnected)
         assertNull(persisted.accountEmail)
     }
+
+    @Test
+    fun `loadCoverThumbnail returns Unavailable when the decoder finds nothing`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            thumbnailDecoder = { null }
+        )
+        val comic = ComicItem(
+            id = "epub-comic",
+            title = "Unsupported",
+            pathOrUrl = "/fake/path.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+
+        val result = viewModel.loadCoverThumbnail(comic)
+
+        assertEquals(CoverLoadState.Unavailable, result)
+    }
+
+    @Test
+    fun `loadCoverThumbnail only invokes the decoder once per comic, caching the result`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var decodeCallCount = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            thumbnailDecoder = { decodeCallCount++; null }
+        )
+        val comic = ComicItem(
+            id = "cached-comic",
+            title = "Test",
+            pathOrUrl = "/fake/path.cbz",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+
+        viewModel.loadCoverThumbnail(comic)
+        viewModel.loadCoverThumbnail(comic)
+        viewModel.loadCoverThumbnail(comic)
+
+        assertEquals(1, decodeCallCount)
+    }
+
+    @Test
+    fun `loadCoverThumbnail decodes independently per distinct comic id`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var decodeCallCount = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            thumbnailDecoder = { decodeCallCount++; null }
+        )
+        val comicA = ComicItem(id = "a", title = "A", pathOrUrl = "/fake/a.cbz", source = ComicSource.LOCAL, format = ComicFormat.CBZ)
+        val comicB = ComicItem(id = "b", title = "B", pathOrUrl = "/fake/b.cbz", source = ComicSource.LOCAL, format = ComicFormat.CBZ)
+
+        viewModel.loadCoverThumbnail(comicA)
+        viewModel.loadCoverThumbnail(comicB)
+        viewModel.loadCoverThumbnail(comicA)
+
+        assertEquals(2, decodeCallCount)
+    }
 }

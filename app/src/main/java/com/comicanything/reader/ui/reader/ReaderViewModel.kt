@@ -11,6 +11,7 @@ import com.comicanything.reader.data.pagesource.PageBitmapCache
 import com.comicanything.reader.data.pagesource.PageDecodeException
 import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
+import com.comicanything.reader.data.pagesource.decodeThumbnail
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.GoogleDriveRepository
@@ -27,6 +28,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class ReaderUiState(
@@ -56,13 +59,20 @@ sealed interface PageLoadState {
     data object Failed : PageLoadState
 }
 
+sealed interface CoverLoadState {
+    data object Loading : CoverLoadState
+    data class Loaded(val bitmap: Bitmap) : CoverLoadState
+    data object Unavailable : CoverLoadState
+}
+
 class ReaderViewModel @JvmOverloads constructor(
     application: Application,
     private val localRepo: LocalFileRepository = LocalFileRepository(),
     private val driveRepo: GoogleDriveRepository = GoogleDriveRepository(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application),
-    private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application)
+    private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application),
+    private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -70,6 +80,11 @@ class ReaderViewModel @JvmOverloads constructor(
 
     private var pageCache: PageBitmapCache? = null
     private var debounceJob: Job? = null
+    private val thumbnailCache = object : LinkedHashMap<String, Bitmap?>(THUMBNAIL_CACHE_SIZE, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap?>) =
+            size > THUMBNAIL_CACHE_SIZE
+    }
+    private val thumbnailMutex = Mutex()
 
     fun setPermissionGranted(granted: Boolean) {
         val wasGranted = _uiState.value.hasStoragePermission
@@ -281,6 +296,16 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    suspend fun loadCoverThumbnail(comic: ComicItem): CoverLoadState = thumbnailMutex.withLock {
+        if (thumbnailCache.containsKey(comic.id)) {
+            val cached = thumbnailCache.getValue(comic.id)
+            return@withLock if (cached != null) CoverLoadState.Loaded(cached) else CoverLoadState.Unavailable
+        }
+        val bitmap = thumbnailDecoder(comic)
+        thumbnailCache[comic.id] = bitmap
+        if (bitmap != null) CoverLoadState.Loaded(bitmap) else CoverLoadState.Unavailable
+    }
+
     private suspend fun loadPage(cache: PageBitmapCache, page: Int) {
         _uiState.value = _uiState.value.copy(isPageLoading = true)
         try {
@@ -337,5 +362,9 @@ class ReaderViewModel @JvmOverloads constructor(
 
     fun toggleAutoCrop() {
         _uiState.value = _uiState.value.copy(autoCropMargins = !_uiState.value.autoCropMargins)
+    }
+
+    companion object {
+        private const val THUMBNAIL_CACHE_SIZE = 60
     }
 }
