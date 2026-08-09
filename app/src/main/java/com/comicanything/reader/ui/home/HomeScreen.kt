@@ -37,7 +37,9 @@ import com.comicanything.reader.ui.reader.ReaderViewModel
 fun HomeScreen(
     viewModel: ReaderViewModel,
     onOpenComic: (ComicItem) -> Unit,
-    onRequestPermission: () -> Unit
+    onRequestPermission: () -> Unit,
+    onConnectDrive: () -> Unit,
+    onDisconnectDrive: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -99,7 +101,7 @@ fun HomeScreen(
         ) {
             when (selectedTab) {
                 0 -> LibraryContent(state, onOpenComic, onRequestPermission)
-                1 -> DriveContent(state, driveUrlInput, onInputChange = { driveUrlInput = it }, onFetch = { viewModel.fetchDriveFolder(driveUrlInput) }, onOpenComic)
+                1 -> DriveContent(state, driveUrlInput, onInputChange = { driveUrlInput = it }, onFetch = { viewModel.fetchDriveFolder(driveUrlInput) }, onOpenComic, onConnectDrive, onDisconnectDrive)
                 2 -> LocalFilesContent(state, onOpenComic, onRequestPermission)
             }
         }
@@ -310,13 +312,48 @@ fun DriveContent(
     input: String,
     onInputChange: (String) -> Unit,
     onFetch: () -> Unit,
-    onOpenComic: (ComicItem) -> Unit
+    onOpenComic: (ComicItem) -> Unit,
+    onConnectDrive: () -> Unit,
+    onDisconnectDrive: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        if (state.isDriveConnected) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Connected" + (state.driveAccountEmail?.let { " as $it" } ?: ""),
+                    color = Color.White,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onDisconnectDrive) {
+                    Text("Disconnect")
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Optional: connect your Google Drive to read comics stored there.",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onConnectDrive) {
+                    Text("Connect")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         OutlinedTextField(
             value = input,
             onValueChange = onInputChange,
