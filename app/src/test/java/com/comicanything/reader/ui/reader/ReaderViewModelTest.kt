@@ -9,6 +9,8 @@ import com.comicanything.reader.MainDispatcherRule
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
+import com.comicanything.reader.data.repository.DriveConnectionHint
+import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
@@ -42,6 +44,13 @@ class ReaderViewModelTest {
     // pattern already used in ReadingProgressRepositoryTest.
     private lateinit var progressRepo: ReadingProgressRepository
 
+    // Same hazard as progressRepo above: ReaderViewModel's default `connectionRepo` argument
+    // constructs a DriveConnectionRepository against the real Context.driveConnectionDataStore
+    // delegate, which also calls Context.getApplicationContext() and throws "not mocked" in
+    // plain JVM unit tests. Every ReaderViewModel(...) below passes this temp-file-backed
+    // instance explicitly instead of relying on the default.
+    private lateinit var connectionRepo: DriveConnectionRepository
+
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
@@ -55,13 +64,19 @@ class ReaderViewModelTest {
             produceFile = { File(tempFolder.root, "test-progress-${System.nanoTime()}.preferences_pb") }
         )
         progressRepo = ReadingProgressRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
+
+        val connectionDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "test-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
     }
 
     @Test
     fun `granting permission after being denied triggers a library load`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
 
         assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
 
@@ -76,7 +91,7 @@ class ReaderViewModelTest {
     fun `revoking permission clears the library`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
         assertEquals(1, viewModel.uiState.value.libraryComics.size)
@@ -91,7 +106,7 @@ class ReaderViewModelTest {
     @Test
     fun `granting permission when already granted does not reload`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
 
@@ -105,7 +120,7 @@ class ReaderViewModelTest {
     @Test
     fun `refreshLibrary re-scans and picks up newly added files when permission is granted`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
 
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
@@ -122,7 +137,7 @@ class ReaderViewModelTest {
     fun `refreshLibrary is a no-op when permission has never been granted`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
 
         viewModel.refreshLibrary()
         advanceUntilIdle()
@@ -134,7 +149,7 @@ class ReaderViewModelTest {
     @Test
     fun `closeComic clears the active comic`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
         val comic = ComicItem(
             id = "1",
             title = "Test Comic",
@@ -155,7 +170,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening a comic with an unsupported format sets an error and does not crash`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
         val comic = ComicItem(
             id = "1",
             title = "Unsupported Book",
@@ -174,7 +189,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
         val comic = ComicItem(
             id = "2",
             title = "Drive Book",
@@ -192,7 +207,7 @@ class ReaderViewModelTest {
     @Test
     fun `loadPageBitmap returns Failed when no comic is open`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
 
         val result = viewModel.loadPageBitmap(1)
 
@@ -202,7 +217,7 @@ class ReaderViewModelTest {
     @Test
     fun `pageSourceGeneration increments each time a comic successfully opens`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
         val comicFile = File(tempFolder.newFolder("Comics"), "test.cbz")
         java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
             zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
@@ -250,7 +265,8 @@ class ReaderViewModelTest {
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             localRepo = localRepo,
-            progressRepo = progressRepo
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
         )
 
         viewModel.setPermissionGranted(true)
@@ -269,7 +285,7 @@ class ReaderViewModelTest {
     fun `loadLocalLibrary leaves scan defaults untouched for a comic with no persisted progress`() = runTest {
         File(tempFolder.newFolder("Comics"), "new_comic.cbz").writeText("fake")
         val localRepo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo, connectionRepo = connectionRepo)
 
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
@@ -309,7 +325,8 @@ class ReaderViewModelTest {
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
         )
 
         viewModel.openComic(comic)
@@ -337,7 +354,8 @@ class ReaderViewModelTest {
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -390,7 +408,8 @@ class ReaderViewModelTest {
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -422,7 +441,8 @@ class ReaderViewModelTest {
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -461,7 +481,8 @@ class ReaderViewModelTest {
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
         )
 
         viewModel.toggleFavorite(comic)
@@ -475,5 +496,140 @@ class ReaderViewModelTest {
 
         assertFalse(comic.isFavorite)
         assertEquals(false, progressRepo.getAll()["fav-comic"]?.isFavorite)
+    }
+
+    @Test
+    fun `loadDriveConnectionState reflects a previously-saved connected hint`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        connectionRepo.save(DriveConnectionHint(isConnected = true, accountEmail = "reader@example.com"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+
+        viewModel.loadDriveConnectionState()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isDriveConnected)
+        assertEquals("reader@example.com", viewModel.uiState.value.driveAccountEmail)
+    }
+
+    @Test
+    fun `loadDriveConnectionState defaults to disconnected when nothing was saved`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+
+        viewModel.loadDriveConnectionState()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isDriveConnected)
+        assertNull(viewModel.uiState.value.driveAccountEmail)
+    }
+
+    @Test
+    fun `onDriveAuthorized marks connected and persists the hint`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+
+        viewModel.onDriveAuthorized("reader@example.com")
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isDriveConnected)
+        assertEquals("reader@example.com", viewModel.uiState.value.driveAccountEmail)
+        val persisted = connectionRepo.get()
+        assertTrue(persisted.isConnected)
+        assertEquals("reader@example.com", persisted.accountEmail)
+    }
+
+    @Test
+    fun `onDriveAuthorized with a null email still marks connected`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+
+        viewModel.onDriveAuthorized(null)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isDriveConnected)
+        assertNull(viewModel.uiState.value.driveAccountEmail)
+    }
+
+    @Test
+    fun `onDriveAuthorizationFailed leaves the state disconnected`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+
+        viewModel.onDriveAuthorizationFailed()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isDriveConnected)
+        assertNull(viewModel.uiState.value.driveAccountEmail)
+    }
+
+    @Test
+    fun `disconnectDrive clears state and persists the disconnected hint`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+        viewModel.onDriveAuthorized("reader@example.com")
+        advanceUntilIdle()
+
+        viewModel.disconnectDrive()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isDriveConnected)
+        assertNull(viewModel.uiState.value.driveAccountEmail)
+        val persisted = connectionRepo.get()
+        assertFalse(persisted.isConnected)
+        assertNull(persisted.accountEmail)
     }
 }

@@ -11,6 +11,8 @@ import com.comicanything.reader.data.pagesource.PageBitmapCache
 import com.comicanything.reader.data.pagesource.PageDecodeException
 import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
+import com.comicanything.reader.data.repository.DriveConnectionHint
+import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
@@ -43,7 +45,9 @@ data class ReaderUiState(
     val currentPageBitmap: Bitmap? = null,
     val pageLoadError: String? = null,
     val isPageLoading: Boolean = false,
-    val pageSourceGeneration: Int = 0
+    val pageSourceGeneration: Int = 0,
+    val isDriveConnected: Boolean = false,
+    val driveAccountEmail: String? = null
 )
 
 sealed interface PageLoadState {
@@ -57,7 +61,8 @@ class ReaderViewModel @JvmOverloads constructor(
     private val localRepo: LocalFileRepository = LocalFileRepository(),
     private val driveRepo: GoogleDriveRepository = GoogleDriveRepository(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application)
+    private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application),
+    private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application)
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -107,6 +112,34 @@ class ReaderViewModel @JvmOverloads constructor(
             _uiState.value = _uiState.value.copy(isLoadingDrive = true)
             val items = driveRepo.fetchFolderContents(folderUrlOrId, apiKey)
             _uiState.value = _uiState.value.copy(driveComics = items, isLoadingDrive = false)
+        }
+    }
+
+    fun loadDriveConnectionState() {
+        viewModelScope.launch {
+            val hint = connectionRepo.get()
+            _uiState.value = _uiState.value.copy(
+                isDriveConnected = hint.isConnected,
+                driveAccountEmail = hint.accountEmail
+            )
+        }
+    }
+
+    fun onDriveAuthorized(accountEmail: String?) {
+        _uiState.value = _uiState.value.copy(isDriveConnected = true, driveAccountEmail = accountEmail)
+        viewModelScope.launch {
+            connectionRepo.save(DriveConnectionHint(isConnected = true, accountEmail = accountEmail))
+        }
+    }
+
+    fun onDriveAuthorizationFailed() {
+        _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
+    }
+
+    fun disconnectDrive() {
+        _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
+        viewModelScope.launch {
+            connectionRepo.save(DriveConnectionHint(isConnected = false, accountEmail = null))
         }
     }
 
