@@ -78,7 +78,8 @@ class ReaderViewModel @JvmOverloads constructor(
     private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application),
     private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application),
     private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail,
-    private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub
+    private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub,
+    private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") }
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -186,8 +187,7 @@ class ReaderViewModel @JvmOverloads constructor(
             openEpubComic(comic)
             return
         }
-        val previousCache = pageCache
-        pageCache = null
+        val (previousCache, previousExtractedDir) = capturePreviousComicResources()
         _uiState.value = _uiState.value.copy(
             activeComic = comic,
             currentPage = comic.currentPage,
@@ -199,9 +199,7 @@ class ReaderViewModel @JvmOverloads constructor(
             pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
         )
         viewModelScope.launch {
-            withContext(NonCancellable) {
-                previousCache?.close()
-            }
+            closePreviousComicResources(previousCache, previousExtractedDir)
             val source = try {
                 withContext(ioDispatcher) { createPageSource(comic) }
             } catch (e: UnsupportedFormatException) {
@@ -236,22 +234,37 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Resolves the parent directory under which per-comic EPUB extraction folders live. Uses the
-     * app's real cache dir on-device; falls back to the JVM temp dir if [Application.getCacheDir]
-     * is unavailable (e.g. a plain-JVM unit test with an unmocked `Application()` and no
-     * Robolectric, where Context methods throw "not mocked" RuntimeExceptions). The fallback
-     * value is never observed by production code paths -- it only matters for tests, which supply
-     * their own [epubExtractor] and ignore the extractionDir argument entirely.
+     * Captures whichever of [pageCache] (from a previously-open PDF/CBZ) or [epubExtractedDir]
+     * (from a previously-open EPUB) is currently active -- regardless of which format is about to
+     * be opened next -- and clears both fields immediately so the new open can proceed without
+     * racing the old resource's teardown. At most one of the two will ever be non-null in
+     * practice (each open path clears the other's field), but capturing both unconditionally here
+     * is what makes cross-format switches (PDF/CBZ -> EPUB or EPUB -> PDF/CBZ) safe: without this,
+     * only the field matching the *new* format's own open path got captured/cleared, silently
+     * leaking the *other* format's resource (an open [PageBitmapCache] or an extracted directory
+     * on disk) for as long as the new comic stayed open.
      */
-    private fun epubCacheRoot(): File = try {
-        File(getApplication<Application>().cacheDir, "epub_temp")
-    } catch (e: Exception) {
-        File(System.getProperty("java.io.tmpdir") ?: ".", "epub_temp")
+    private fun capturePreviousComicResources(): Pair<PageBitmapCache?, File?> {
+        val previousCache = pageCache
+        val previousExtractedDir = epubExtractedDir
+        pageCache = null
+        epubExtractedDir = null
+        return previousCache to previousExtractedDir
+    }
+
+    /**
+     * Closes/deletes whatever [capturePreviousComicResources] captured, under [NonCancellable] so
+     * the cleanup always completes even if this coroutine is cancelled by a subsequent open.
+     */
+    private suspend fun closePreviousComicResources(previousCache: PageBitmapCache?, previousExtractedDir: File?) {
+        withContext(NonCancellable) {
+            previousCache?.close()
+            previousExtractedDir?.let { runCatching { it.deleteRecursively() } }
+        }
     }
 
     private fun openEpubComic(comic: ComicItem) {
-        val previousExtractedDir = epubExtractedDir
-        epubExtractedDir = null
+        val (previousCache, previousExtractedDir) = capturePreviousComicResources()
         _uiState.value = _uiState.value.copy(
             activeComic = comic,
             isControlsVisible = true,
@@ -261,9 +274,7 @@ class ReaderViewModel @JvmOverloads constructor(
             pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
         )
         viewModelScope.launch {
-            withContext(NonCancellable) {
-                previousExtractedDir?.let { runCatching { it.deleteRecursively() } }
-            }
+            closePreviousComicResources(previousCache, previousExtractedDir)
             val extractionDir = File(epubCacheRoot(), comic.id)
             val book = withContext(ioDispatcher) { epubExtractor(File(comic.pathOrUrl), extractionDir) }
             if (book == null) {

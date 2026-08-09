@@ -776,7 +776,8 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
-            epubExtractor = { _, _ -> fakeBook }
+            epubExtractor = { _, _ -> fakeBook },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
         val comic = ComicItem(
             id = "epub-comic",
@@ -802,7 +803,8 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
-            epubExtractor = { _, _ -> null }
+            epubExtractor = { _, _ -> null },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
         val comic = ComicItem(
             id = "bad-epub",
@@ -831,7 +833,8 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
-            epubExtractor = { _, _ -> fakeBook }
+            epubExtractor = { _, _ -> fakeBook },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
         val comic = ComicItem(
             id = "epub-comic-2",
@@ -873,7 +876,8 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
-            epubExtractor = { _, _ -> fakeBook }
+            epubExtractor = { _, _ -> fakeBook },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -897,7 +901,8 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
-            epubExtractor = { _, _ -> fakeBook }
+            epubExtractor = { _, _ -> fakeBook },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
         val comic = ComicItem(
             id = "clamp-comic",
@@ -912,5 +917,114 @@ class ReaderViewModelTest {
         viewModel.setEpubScrollProgress(1.5f)
 
         assertEquals(1f, viewModel.uiState.value.activeComic?.progressPercentage)
+    }
+
+    @Test
+    fun `opening an EPUB comic closes a previously active CBZ page cache`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val comicFile = File(tempFolder.newFolder("Comics"), "test.cbz")
+        java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zos.write(byteArrayOf(1, 2, 3))
+            zos.closeEntry()
+        }
+        val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
+        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> fakeBook },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
+        )
+        val cbzComic = ComicItem(
+            id = "cbz-then-epub",
+            title = "Test CBZ",
+            pathOrUrl = comicFile.absolutePath,
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+        val epubComic = ComicItem(
+            id = "epub-after-cbz",
+            title = "Test EPUB",
+            pathOrUrl = "/fake/after-cbz.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+
+        viewModel.openComic(cbzComic)
+        advanceUntilIdle()
+        // Sanity check: the CBZ's PageBitmapCache is backed by a real, still-open java.util.zip.ZipFile
+        // on comicFile. On this JDK/Windows, an open ZipFile holds an OS-level handle that blocks
+        // deletion of the underlying file -- confirmed empirically before writing this test. If this
+        // assertion itself fails, the CBZ never really opened and the rest of the test proves nothing.
+        assertFalse(comicFile.delete())
+        // Recreate the file the failed delete attempt above didn't actually remove (delete() returning
+        // false leaves it untouched, but be explicit rather than relying on that).
+        assertTrue(comicFile.exists())
+
+        viewModel.openComic(epubComic)
+        advanceUntilIdle()
+
+        // The EPUB opened successfully despite not calling closeComic() first...
+        assertEquals(fakeBook, viewModel.uiState.value.epubBook)
+        // ...and, critically, the previous CBZ's PageBitmapCache was actually closed (not merely
+        // dropped) as part of that switch: ZipFile.close() released the OS-level handle, so the file
+        // can now be deleted. Before the cross-format fix, opening an EPUB never looked at pageCache
+        // at all, so this delete would still have failed here.
+        assertTrue(comicFile.delete())
+    }
+
+    @Test
+    fun `opening a CBZ comic deletes a previously active EPUB's extracted directory`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
+        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
+        val comicFile = File(tempFolder.newFolder("Comics"), "after-epub.cbz")
+        java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zos.write(byteArrayOf(1, 2, 3))
+            zos.closeEntry()
+        }
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> fakeBook },
+            epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
+        )
+        val epubComic = ComicItem(
+            id = "epub-then-cbz",
+            title = "Test EPUB",
+            pathOrUrl = "/fake/before-cbz.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+        val cbzComic = ComicItem(
+            id = "cbz-after-epub",
+            title = "Test CBZ",
+            pathOrUrl = comicFile.absolutePath,
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+        viewModel.openComic(epubComic)
+        advanceUntilIdle()
+        assertTrue(extractedDir.exists())
+
+        viewModel.openComic(cbzComic)
+        advanceUntilIdle()
+
+        // The EPUB's extracted directory must be cleaned up as part of switching to the CBZ, even
+        // though closeComic() was never called -- before the cross-format fix, openComic's non-EPUB
+        // path never looked at epubExtractedDir at all, so this directory would have leaked until the
+        // next EPUB open or an explicit close.
+        assertTrue(!extractedDir.exists())
+        assertNull(viewModel.uiState.value.epubBook)
     }
 }
