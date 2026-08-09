@@ -169,4 +169,50 @@ class EpubExtractorTest {
         assertTrue(book != null)
         assertTrue(!File(extractionDir, "stale-leftover-file.txt").exists())
     }
+
+    @Test
+    fun `rejects zip entries with path traversal attempts`() = runTest {
+        val epub = buildEpub(
+            mapOf(
+                "META-INF/container.xml" to containerXml,
+                "OEBPS/content.opf" to opfXml,
+                "OEBPS/chapter1.xhtml" to "<html><body><p>One</p></body></html>",
+                "OEBPS/chapter2.xhtml" to "<html><body><p>Two</p></body></html>",
+                "../evil.txt" to "malicious content"
+            )
+        )
+        val extractionDir = tempFolder.newFolder("extract-${System.nanoTime()}")
+
+        val book = extractEpub(epub, extractionDir)
+
+        assertTrue(book != null)
+        val evilFile = File(extractionDir.parentFile, "evil.txt")
+        assertTrue(!evilFile.exists())
+    }
+
+    @Test
+    fun `rejects XML with DOCTYPE declarations containing external entities`() = runTest {
+        val maliciousContainer = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE container [
+                <!ENTITY xxe SYSTEM "file:///etc/passwd">
+            ]>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                <rootfiles>
+                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+                </rootfiles>
+            </container>
+        """.trimIndent()
+        val epub = buildEpub(
+            mapOf(
+                "META-INF/container.xml" to maliciousContainer,
+                "OEBPS/content.opf" to opfXml
+            )
+        )
+        val extractionDir = tempFolder.newFolder("extract-${System.nanoTime()}")
+
+        val book = extractEpub(epub, extractionDir)
+
+        assertNull(book)
+    }
 }

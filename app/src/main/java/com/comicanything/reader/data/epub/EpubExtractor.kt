@@ -19,8 +19,13 @@ suspend fun extractEpub(epubFile: File, extractionDir: File): EpubBook? = withCo
         extractionDir.mkdirs()
 
         ZipFile(epubFile).use { zip ->
+            val canonicalExtractionDir = extractionDir.canonicalPath
             zip.entries().asSequence().filterNot { it.isDirectory }.forEach { entry ->
                 val outFile = File(extractionDir, entry.name)
+                val canonicalOutFile = outFile.canonicalPath
+                if (!canonicalOutFile.startsWith(canonicalExtractionDir + File.separator)) {
+                    return@forEach // Skip entries that try to escape the extraction directory
+                }
                 outFile.parentFile?.mkdirs()
                 zip.getInputStream(entry).use { input ->
                     outFile.outputStream().use { output -> input.copyTo(output) }
@@ -48,7 +53,13 @@ suspend fun extractEpub(epubFile: File, extractionDir: File): EpubBook? = withCo
 }
 
 private fun newDocument(file: File): Document {
-    val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+    val factory = DocumentBuilderFactory.newInstance().apply {
+        isNamespaceAware = true
+        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        setFeature("http://xml.org/sax/features/external-general-entities", false)
+        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        isExpandEntityReferences = false
+    }
     return factory.newDocumentBuilder().parse(file)
 }
 
