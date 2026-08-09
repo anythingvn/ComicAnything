@@ -115,10 +115,10 @@ fun ComicListRow(comic: ComicItem, onClick: () -> Unit) {
 
 ### Filtering logic
 
-One small, pure, private extension function in `HomeScreen.kt`, used by both `LibraryContent` and `LocalFilesContent`:
+One small, pure, `internal` (not `private`) extension function in `HomeScreen.kt`, used by both `LibraryContent` and `LocalFilesContent`. `internal`, not `private`, specifically so the unit tests described below — living in a separate file under `app/src/test/...`, per this project's established convention — can call it directly; a Kotlin file-`private` top-level function isn't visible outside its own file, even to a test in the same module:
 
 ```kotlin
-private fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> =
+internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> =
     filter { comic ->
         (formats.isEmpty() || comic.format in formats) &&
         (query.isBlank() || comic.title.contains(query, ignoreCase = true))
