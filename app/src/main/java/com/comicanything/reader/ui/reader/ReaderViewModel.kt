@@ -296,14 +296,16 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    suspend fun loadCoverThumbnail(comic: ComicItem): CoverLoadState = thumbnailMutex.withLock {
-        if (thumbnailCache.containsKey(comic.id)) {
-            val cached = thumbnailCache.getValue(comic.id)
-            return@withLock if (cached != null) CoverLoadState.Loaded(cached) else CoverLoadState.Unavailable
+    suspend fun loadCoverThumbnail(comic: ComicItem): CoverLoadState {
+        thumbnailMutex.withLock {
+            if (thumbnailCache.containsKey(comic.id)) {
+                val cached = thumbnailCache.getValue(comic.id)
+                return if (cached != null) CoverLoadState.Loaded(cached) else CoverLoadState.Unavailable
+            }
         }
         val bitmap = thumbnailDecoder(comic)
-        thumbnailCache[comic.id] = bitmap
-        if (bitmap != null) CoverLoadState.Loaded(bitmap) else CoverLoadState.Unavailable
+        thumbnailMutex.withLock { thumbnailCache[comic.id] = bitmap }
+        return if (bitmap != null) CoverLoadState.Loaded(bitmap) else CoverLoadState.Unavailable
     }
 
     private suspend fun loadPage(cache: PageBitmapCache, page: Int) {

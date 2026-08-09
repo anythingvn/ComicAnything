@@ -6,14 +6,19 @@ import com.comicanything.reader.data.model.ComicSource
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class ThumbnailDecoderTest {
 
-    private fun comic(format: ComicFormat, source: ComicSource = ComicSource.LOCAL) = ComicItem(
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
+    private fun comic(format: ComicFormat, source: ComicSource = ComicSource.LOCAL, pathOrUrl: String? = null) = ComicItem(
         id = "1",
         title = "Test Comic",
-        pathOrUrl = "/fake/path.${format.name.lowercase()}",
+        pathOrUrl = pathOrUrl ?: "/fake/path.${format.name.lowercase()}",
         source = source,
         format = format
     )
@@ -62,5 +67,35 @@ class ThumbnailDecoderTest {
     fun `sample size is 2 for a modestly oversized image`() {
         // actualWidth=600, targetWidth=240: halfWidth=300; 300/1>=240, 300/2=150<240 -> sampleSize=2
         assertEquals(2, calculateThumbnailSampleSize(actualWidth = 600, targetWidth = 240))
+    }
+
+    @Test
+    fun `returns null for a CBZ with zero image entries`() = runTest {
+        val zipFile = tempFolder.newFile("empty-${System.nanoTime()}.cbz")
+        java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("ComicInfo.xml"))
+            zos.write("<ComicInfo/>".toByteArray())
+            zos.closeEntry()
+        }
+        val result = decodeThumbnail(comic(ComicFormat.CBZ, pathOrUrl = zipFile.absolutePath))
+
+        assertNull(result)
+    }
+
+    @Test
+    fun `returns null for a nonexistent local file`() = runTest {
+        val result = decodeThumbnail(comic(ComicFormat.CBZ, pathOrUrl = "/nonexistent/path/${System.nanoTime()}.cbz"))
+
+        assertNull(result)
+    }
+
+    @Test
+    fun `returns null for a file that is not a valid zip`() = runTest {
+        val notAZip = tempFolder.newFile("not-a-zip-${System.nanoTime()}.cbz")
+        notAZip.writeText("this is plain text, not a zip archive")
+
+        val result = decodeThumbnail(comic(ComicFormat.CBZ, pathOrUrl = notAZip.absolutePath))
+
+        assertNull(result)
     }
 }

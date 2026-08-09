@@ -90,7 +90,7 @@ anything that assumes the app can read files on a real device.
 - [x] Wire up the search bar (spec's TopAppBar claims search; `HomeScreen.kt` topBar has no search field at all)
 - [x] Add format filter chips (`[PDF]`, `[CBZ]`, `[EPUB]`) to filter the bookshelf grid
 - [x] Add Grid vs List layout switcher (spec claims it; only grid exists)
-- [x] Real cover thumbnails: render the first page (via Epic 2's PDF/CBZ pipeline) or load `coverUrl`/Drive `thumbnailLink` through Coil, replacing the static book icon in both grid and carousel cards
+- [x] Real cover thumbnails: dedicated lightweight decoder renders each local PDF/CBZ's first page as a small thumbnail (not reusing Epic 2's full-resolution reader pipeline); Google Drive `coverUrl`/`thumbnailLink` covers via Coil remain deferred pending real Drive folder data (Epic 4 sub-project 2)
 - [x] Confirm "Continue Reading" carousel resume tap opens the reader at the correct persisted page (depends on Epic 3)
 
 ## Epic 8 — Testing & Quality ⬜

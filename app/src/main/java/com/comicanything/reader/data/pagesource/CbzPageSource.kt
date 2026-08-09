@@ -53,7 +53,7 @@ class CbzPageSource(file: File) : ComicPageSource {
                 BitmapFactory.decodeStream(stream, null, boundsOptions)
             }
             val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = calculateInSampleSize(boundsOptions.outWidth, TARGET_WIDTH_PX)
+                inSampleSize = calculateThumbnailSampleSize(boundsOptions.outWidth, TARGET_WIDTH_PX)
             }
             zipFile.getInputStream(entry).use { stream ->
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
@@ -66,17 +66,6 @@ class CbzPageSource(file: File) : ComicPageSource {
         } catch (e: Exception) {
             throw PageDecodeException(page, e)
         }
-    }
-
-    private fun calculateInSampleSize(actualWidth: Int, targetWidth: Int): Int {
-        var sampleSize = 1
-        if (actualWidth > targetWidth) {
-            val halfWidth = actualWidth / 2
-            while (halfWidth / sampleSize >= targetWidth) {
-                sampleSize *= 2
-            }
-        }
-        return sampleSize
     }
 
     override fun close() {

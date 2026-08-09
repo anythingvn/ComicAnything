@@ -59,8 +59,17 @@ private suspend fun decodeCbzThumbnail(file: File): Bitmap? = withContext(Dispat
             val decodeOptions = BitmapFactory.Options().apply {
                 inSampleSize = calculateThumbnailSampleSize(boundsOptions.outWidth, THUMBNAIL_TARGET_WIDTH_PX)
             }
-            zipFile.getInputStream(entry).use { stream ->
+            val sampledBitmap = zipFile.getInputStream(entry).use { stream ->
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
+            } ?: return@withContext null
+            if (sampledBitmap.width <= THUMBNAIL_TARGET_WIDTH_PX) {
+                sampledBitmap
+            } else {
+                val scale = THUMBNAIL_TARGET_WIDTH_PX.toFloat() / sampledBitmap.width
+                val scaledHeight = (sampledBitmap.height * scale).toInt().coerceAtLeast(1)
+                val scaledBitmap = Bitmap.createScaledBitmap(sampledBitmap, THUMBNAIL_TARGET_WIDTH_PX, scaledHeight, true)
+                if (scaledBitmap !== sampledBitmap) sampledBitmap.recycle()
+                scaledBitmap
             }
         }
     } catch (e: Exception) {
