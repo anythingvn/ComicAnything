@@ -4,7 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.w3c.dom.Document
 import org.w3c.dom.Element
+import org.xml.sax.InputSource
 import java.io.File
+import java.io.StringReader
 import java.util.zip.ZipFile
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -52,15 +54,48 @@ suspend fun extractEpub(epubFile: File, extractionDir: File): EpubBook? = withCo
     }
 }
 
+/**
+ * Builds a [Document] guarded against XXE (XML External Entity) attacks.
+ *
+ * NOTE: We intentionally avoid `DocumentBuilderFactory.setFeature(...)` with
+ * Xerces/SAX-specific feature URIs (e.g. "disallow-doctype-decl",
+ * "external-general-entities"). Those are NOT supported by Android's built-in
+ * `DocumentBuilderFactory` implementation (`org.apache.harmony.xml.parsers.
+ * DocumentBuilderFactoryImpl`), which throws `ParserConfigurationException` for
+ * unrecognized feature URIs. That mismatch previously broke EPUB parsing on
+ * every real device while passing plain-JVM unit tests (whose default factory
+ * is typically Xerces-based).
+ *
+ * Instead we rely only on standard, implementation-agnostic JAXP APIs:
+ *  - A no-op [org.xml.sax.EntityResolver] on the builder that resolves every
+ *    external entity (general entities and the external DTD subset) to an
+ *    empty document, so external file/network content can never be fetched or
+ *    substituted into the parsed document.
+ *  - `isExpandEntityReferences = false`, a plain `DocumentBuilderFactory` bean
+ *    property (not a vendor feature URI). Verified on-device to be supported by
+ *    Android's Harmony-based implementation.
+ *
+ * NOTE ON `isXIncludeAware`: we deliberately do NOT call
+ * `factory.isXIncludeAware = false` here, even though it looks like another
+ * "portable, non-setFeature" hardening knob. On-device testing showed Android's
+ * `DocumentBuilderFactoryImpl` throws `UnsupportedOperationException: This
+ * parser does not support specification "Unknown" version "0.0"` from
+ * `setXIncludeAware(false)` -- i.e. it doesn't support touching this property
+ * *at all*, not even to set it to its own default. `isXIncludeAware` already
+ * defaults to `false` (XInclude processing is opt-in, never implicit), so
+ * leaving it untouched preserves the same protection without calling an
+ * unsupported setter. This is exactly the class of assumption the previous
+ * `setFeature(...)` bug taught us not to make without verifying on a real
+ * device -- so it was verified here, and it failed the same way.
+ */
 private fun newDocument(file: File): Document {
     val factory = DocumentBuilderFactory.newInstance().apply {
         isNamespaceAware = true
-        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        setFeature("http://xml.org/sax/features/external-general-entities", false)
-        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
         isExpandEntityReferences = false
     }
-    return factory.newDocumentBuilder().parse(file)
+    val builder = factory.newDocumentBuilder()
+    builder.setEntityResolver { _, _ -> InputSource(StringReader("")) }
+    return builder.parse(file)
 }
 
 private fun parseContainerForOpfPath(containerFile: File): String? {
