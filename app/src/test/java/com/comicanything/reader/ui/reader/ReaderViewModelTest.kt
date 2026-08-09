@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import com.comicanything.reader.MainDispatcherRule
+import com.comicanything.reader.data.epub.EpubBook
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
@@ -174,9 +175,9 @@ class ReaderViewModelTest {
         val comic = ComicItem(
             id = "1",
             title = "Unsupported Book",
-            pathOrUrl = "/fake/path.epub",
+            pathOrUrl = "/fake/path.mobi",
             source = ComicSource.LOCAL,
-            format = ComicFormat.EPUB
+            format = ComicFormat.MOBI
         )
 
         viewModel.openComic(comic)
@@ -761,5 +762,155 @@ class ReaderViewModelTest {
         viewModel.loadCoverThumbnail(comicA)
 
         assertEquals(2, decodeCallCount)
+    }
+
+    @Test
+    fun `opening an EPUB comic uses the injected extractor and populates epubBook`() = runTest {
+        val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
+        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> fakeBook }
+        )
+        val comic = ComicItem(
+            id = "epub-comic",
+            title = "Test EPUB",
+            pathOrUrl = "/fake/path.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        assertEquals(fakeBook, viewModel.uiState.value.epubBook)
+        assertNull(viewModel.uiState.value.pageLoadError)
+    }
+
+    @Test
+    fun `opening an EPUB comic sets an error when extraction fails`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> null }
+        )
+        val comic = ComicItem(
+            id = "bad-epub",
+            title = "Corrupt EPUB",
+            pathOrUrl = "/fake/corrupt.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        assertEquals("Couldn't open this EPUB file", viewModel.uiState.value.pageLoadError)
+        assertNull(viewModel.uiState.value.epubBook)
+    }
+
+    @Test
+    fun `closeComic deletes the extracted EPUB directory`() = runTest {
+        val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
+        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> fakeBook }
+        )
+        val comic = ComicItem(
+            id = "epub-comic-2",
+            title = "Test EPUB",
+            pathOrUrl = "/fake/path2.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+        assertTrue(extractedDir.exists())
+
+        viewModel.closeComic()
+        advanceUntilIdle()
+
+        assertTrue(!extractedDir.exists())
+        assertNull(viewModel.uiState.value.epubBook)
+    }
+
+    @Test
+    fun `setEpubScrollProgress updates progressPercentage and persists after the debounce window`() = runTest {
+        val progressDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "progress-${System.nanoTime()}.preferences_pb") }
+        )
+        val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
+        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
+        val comic = ComicItem(
+            id = "scroll-comic",
+            title = "Test EPUB",
+            pathOrUrl = "/fake/scroll.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> fakeBook }
+        )
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        viewModel.setEpubScrollProgress(0.42f)
+        advanceTimeBy(1_500)
+        runCurrent()
+
+        assertEquals(0.42f, progressRepo.getAll()["scroll-comic"]?.progressPercentage)
+    }
+
+    @Test
+    fun `setEpubScrollProgress clamps values outside 0 to 1`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
+        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            epubExtractor = { _, _ -> fakeBook }
+        )
+        val comic = ComicItem(
+            id = "clamp-comic",
+            title = "Test EPUB",
+            pathOrUrl = "/fake/clamp.epub",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.EPUB
+        )
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        viewModel.setEpubScrollProgress(1.5f)
+
+        assertEquals(1f, viewModel.uiState.value.activeComic?.progressPercentage)
     }
 }

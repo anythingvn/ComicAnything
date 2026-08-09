@@ -4,7 +4,10 @@ import android.app.Application
 import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.comicanything.reader.data.epub.EpubBook
+import com.comicanything.reader.data.epub.extractEpub
 import com.comicanything.reader.data.model.ColorFilterMode
+import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ReadingMode
 import com.comicanything.reader.data.pagesource.PageBitmapCache
@@ -31,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 
 data class ReaderUiState(
     val libraryComics: List<ComicItem> = emptyList(),
@@ -50,7 +54,8 @@ data class ReaderUiState(
     val isPageLoading: Boolean = false,
     val pageSourceGeneration: Int = 0,
     val isDriveConnected: Boolean = false,
-    val driveAccountEmail: String? = null
+    val driveAccountEmail: String? = null,
+    val epubBook: EpubBook? = null
 )
 
 sealed interface PageLoadState {
@@ -72,7 +77,8 @@ class ReaderViewModel @JvmOverloads constructor(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application),
     private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application),
-    private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail
+    private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail,
+    private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -80,6 +86,7 @@ class ReaderViewModel @JvmOverloads constructor(
 
     private var pageCache: PageBitmapCache? = null
     private var debounceJob: Job? = null
+    private var epubExtractedDir: File? = null
     private val thumbnailCache = object : LinkedHashMap<String, Bitmap?>(THUMBNAIL_CACHE_SIZE, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap?>) =
             size > THUMBNAIL_CACHE_SIZE
@@ -175,6 +182,10 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun openComic(comic: ComicItem) {
+        if (comic.format == ComicFormat.EPUB) {
+            openEpubComic(comic)
+            return
+        }
         val previousCache = pageCache
         pageCache = null
         _uiState.value = _uiState.value.copy(
@@ -184,6 +195,7 @@ class ReaderViewModel @JvmOverloads constructor(
             isControlsVisible = true,
             currentPageBitmap = null,
             pageLoadError = null,
+            epubBook = null,
             pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
         )
         viewModelScope.launch {
@@ -223,12 +235,53 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Resolves the parent directory under which per-comic EPUB extraction folders live. Uses the
+     * app's real cache dir on-device; falls back to the JVM temp dir if [Application.getCacheDir]
+     * is unavailable (e.g. a plain-JVM unit test with an unmocked `Application()` and no
+     * Robolectric, where Context methods throw "not mocked" RuntimeExceptions). The fallback
+     * value is never observed by production code paths -- it only matters for tests, which supply
+     * their own [epubExtractor] and ignore the extractionDir argument entirely.
+     */
+    private fun epubCacheRoot(): File = try {
+        File(getApplication<Application>().cacheDir, "epub_temp")
+    } catch (e: Exception) {
+        File(System.getProperty("java.io.tmpdir") ?: ".", "epub_temp")
+    }
+
+    private fun openEpubComic(comic: ComicItem) {
+        val previousExtractedDir = epubExtractedDir
+        epubExtractedDir = null
+        _uiState.value = _uiState.value.copy(
+            activeComic = comic,
+            isControlsVisible = true,
+            pageLoadError = null,
+            epubBook = null,
+            currentPageBitmap = null,
+            pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
+        )
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                previousExtractedDir?.let { runCatching { it.deleteRecursively() } }
+            }
+            val extractionDir = File(epubCacheRoot(), comic.id)
+            val book = withContext(ioDispatcher) { epubExtractor(File(comic.pathOrUrl), extractionDir) }
+            if (book == null) {
+                _uiState.value = _uiState.value.copy(pageLoadError = "Couldn't open this EPUB file")
+                return@launch
+            }
+            epubExtractedDir = book.extractedDir
+            _uiState.value = _uiState.value.copy(epubBook = book)
+        }
+    }
+
     fun closeComic() {
         flushAndTeardown()
         _uiState.value = _uiState.value.copy(
             activeComic = null,
             currentPageBitmap = null,
-            pageLoadError = null
+            pageLoadError = null,
+            epubBook = null
         )
     }
 
@@ -253,8 +306,10 @@ class ReaderViewModel @JvmOverloads constructor(
      */
     private fun flushAndTeardown() {
         val cacheToClose = pageCache
+        val extractedDirToClean = epubExtractedDir
         val comicToFlush = _uiState.value.activeComic
         pageCache = null
+        epubExtractedDir = null
         if (comicToFlush != null) {
             persistProgress(comicToFlush)
         } else {
@@ -263,6 +318,11 @@ class ReaderViewModel @JvmOverloads constructor(
         if (cacheToClose != null) {
             viewModelScope.launch(NonCancellable) {
                 cacheToClose.close()
+            }
+        }
+        if (extractedDirToClean != null) {
+            viewModelScope.launch(NonCancellable) {
+                runCatching { extractedDirToClean.deleteRecursively() }
             }
         }
     }
@@ -277,6 +337,15 @@ class ReaderViewModel @JvmOverloads constructor(
             schedulePersist(comic)
         }
         return clamped
+    }
+
+    fun setEpubScrollProgress(percentage: Float) {
+        val clamped = percentage.coerceIn(0f, 1f)
+        _uiState.value.activeComic?.let { comic ->
+            comic.progressPercentage = clamped
+            comic.lastReadTimestamp = System.currentTimeMillis()
+            schedulePersist(comic)
+        }
     }
 
     fun setPage(page: Int) {
