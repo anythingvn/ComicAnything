@@ -522,9 +522,11 @@ import android.util.Log
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.ClearTokenRequest
 import com.google.android.gms.auth.api.identity.Identity
-import com.google.android.gms.auth.api.identity.Scope
+import com.google.android.gms.common.api.Scope
 import com.google.android.gms.common.api.ApiException
 ```
+
+(`Scope` lives in `com.google.android.gms.common.api`, not `com.google.android.gms.auth.api.identity` — confirmed by extracting `play-services-auth:21.6.0`'s actual AAR contents: that package has `AuthorizationRequest`/`AuthorizationResult`/`ClearTokenRequest`/`Identity` but no `Scope` class; `Scope` is defined in the transitive `play-services-basement` dependency instead, under the `common.api` package.)
 
 Add a private constant for the scope, above the class:
 
