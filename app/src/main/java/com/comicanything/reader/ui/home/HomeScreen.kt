@@ -28,9 +28,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
+
+internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> =
+    filter { comic ->
+        (formats.isEmpty() || comic.format in formats) &&
+            (query.isBlank() || comic.title.contains(query, ignoreCase = true))
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
