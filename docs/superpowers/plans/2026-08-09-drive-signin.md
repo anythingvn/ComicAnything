@@ -369,6 +369,8 @@ Add these test cases to `app/src/test/java/com/comicanything/reader/ui/reader/Re
 
 Add these imports to the top of the test file, alongside the existing ones: `com.comicanything.reader.data.repository.DriveConnectionHint` and `com.comicanything.reader.data.repository.DriveConnectionRepository`.
 
+**Also required, not optional (confirmed by running the tests — see below):** the new `connectionRepo` constructor parameter's default, `DriveConnectionRepository(application)`, has the exact same unmocked-`Context.getApplicationContext()` hazard that `progressRepo`'s default already has (see the file's existing `progressRepo` comment). Every one of the file's pre-existing `ReaderViewModel(...)` constructions will still *compile* without passing `connectionRepo` (the parameter has a default), but will *fail at runtime* with a `RuntimeException` unless it's passed explicitly — this is not a hypothetical, it reproduces on every one of those tests. Fix it the same way `progressRepo` is already handled: add a `private lateinit var connectionRepo: DriveConnectionRepository` field, initialize it inside the existing `@Before fun setUpProgressRepo()` block (against its own temp-file-backed `PreferenceDataStoreFactory.create(scope = CoroutineScope(Dispatchers.Unconfined), ...)`, same as `progressRepo`'s), and add `connectionRepo = connectionRepo` to every pre-existing `ReaderViewModel(...)` call site in the file. The 6 new tests below already construct and pass their own local `connectionRepo` per-test, so they don't need this — only the pre-existing tests do.
+
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```powershell
