@@ -587,7 +587,7 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `onDriveAuthorizationFailed leaves the state disconnected`() = runTest {
+    fun `onDriveAuthorizationFailed leaves the state disconnected without clobbering a persisted connected hint`() = runTest {
         val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
             scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
@@ -599,12 +599,69 @@ class ReaderViewModelTest {
             progressRepo = progressRepo,
             connectionRepo = connectionRepo
         )
+        viewModel.onDriveAuthorized("reader@example.com")
+        advanceUntilIdle()
 
         viewModel.onDriveAuthorizationFailed()
         advanceUntilIdle()
 
         assertFalse(viewModel.uiState.value.isDriveConnected)
         assertNull(viewModel.uiState.value.driveAccountEmail)
+        val persisted = connectionRepo.get()
+        assertTrue(persisted.isConnected)
+        assertEquals("reader@example.com", persisted.accountEmail)
+    }
+
+    @Test
+    fun `onDriveSilentCheckSucceeded does not reconnect after an explicit disconnect`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+        viewModel.onDriveAuthorized("reader@example.com")
+        advanceUntilIdle()
+        viewModel.disconnectDrive()
+        advanceUntilIdle()
+
+        // Simulates checkDriveAuthorizationSilently() succeeding on the next app resume, even though
+        // Play Services' underlying grant is technically still valid (clearToken() never revoked it
+        // server-side) -- this must NOT silently re-establish the connected state the user just left.
+        viewModel.onDriveSilentCheckSucceeded()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isDriveConnected)
+        assertNull(viewModel.uiState.value.driveAccountEmail)
+        val persisted = connectionRepo.get()
+        assertFalse(persisted.isConnected)
+    }
+
+    @Test
+    fun `onDriveSilentCheckSucceeded confirms an already-connected state`() = runTest {
+        val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "drive-connection-${System.nanoTime()}.preferences_pb") }
+        )
+        val connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+        connectionRepo.save(DriveConnectionHint(isConnected = true, accountEmail = "reader@example.com"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo
+        )
+
+        viewModel.onDriveSilentCheckSucceeded()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isDriveConnected)
+        assertEquals("reader@example.com", viewModel.uiState.value.driveAccountEmail)
     }
 
     @Test

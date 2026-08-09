@@ -136,6 +136,22 @@ class ReaderViewModel @JvmOverloads constructor(
         _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
     }
 
+    fun onDriveSilentCheckSucceeded() {
+        viewModelScope.launch {
+            val hint = connectionRepo.get()
+            if (hint.isConnected) {
+                _uiState.value = _uiState.value.copy(isDriveConnected = true, driveAccountEmail = hint.accountEmail)
+            }
+            // If the persisted hint says disconnected, ignore this success. Play Services' grant is
+            // still valid (clearToken() only clears the local token cache, it doesn't revoke the
+            // grant server-side), so authorize() succeeding here does NOT mean the user wants to be
+            // reconnected -- it just means Google still thinks the app has access. Silently
+            // re-establishing "connected" from this signal would undo an explicit disconnectDrive()
+            // on the very next app resume. Only an explicit Connect tap (onDriveAuthorized) may
+            // establish a connected state; this method may only confirm one that already exists.
+        }
+    }
+
     fun disconnectDrive() {
         _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
         viewModelScope.launch {

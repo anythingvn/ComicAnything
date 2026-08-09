@@ -104,22 +104,23 @@ class MainActivity : ComponentActivity() {
             .authorize(request)
             .addOnSuccessListener { result ->
                 if (!result.hasResolution()) {
-                    // Grant is still valid -- reconcile the optimistic hint with the live check,
-                    // and remember the fresh token so disconnectDrive() (below) has something
+                    // Grant is still valid -- but this is a SILENT check that runs on every
+                    // onResume(), not an explicit user action, so it must only CONFIRM an
+                    // already-connected state, never ESTABLISH one from scratch. clearToken()
+                    // (see disconnectDrive() below) only clears Play Services' local token
+                    // cache; it does not revoke the grant server-side. So after an explicit
+                    // disconnect, this authorize() call still succeeds with hasResolution() ==
+                    // false on the very next resume -- if it called onDriveAuthorized() here
+                    // (which unconditionally sets connected = true and persists it), it would
+                    // silently undo the user's disconnect with zero interaction. Calling
+                    // onDriveSilentCheckSucceeded() instead defers to the persisted hint: it
+                    // only flips the UI to connected if the hint already says connected.
+                    //
+                    // Still remember the fresh token so disconnectDrive() (below) has something
                     // to clear -- this call, not connectDrive(), is what actually runs on every
                     // app resume, so it's the reliable place to keep lastAccessToken current.
-                    //
-                    // Passing null for the email: per the design spec, resolving the signed-in
-                    // account's actual email address wasn't confirmed against current docs
-                    // (AuthorizationResult didn't expose one in the fetched reference) and is an
-                    // open question for a future task, not this one. DriveConnectionHint's
-                    // accountEmail is nullable specifically so the UI degrades to a plain
-                    // "Connected" state without a name -- this is that fallback in use, not a
-                    // bug. Do not "fix" this by reading back whatever driveAccountEmail already
-                    // happens to hold; that would just be echoing stale/absent state, not
-                    // resolving a real one.
                     lastAccessToken = result.accessToken
-                    viewModel.onDriveAuthorized(accountEmail = null)
+                    viewModel.onDriveSilentCheckSucceeded()
                 } else {
                     // Grant needs interactive re-confirmation (revoked, expired scope, etc).
                     // Per the "never auto-pop consent UI" rule, this silent check does NOT
@@ -158,7 +159,10 @@ class MainActivity : ComponentActivity() {
             .authorize(request)
             .addOnSuccessListener { result ->
                 if (result.hasResolution()) {
-                    val pendingIntent = result.pendingIntent!!
+                    val pendingIntent = result.pendingIntent ?: run {
+                        viewModel.onDriveAuthorizationFailed()
+                        return@addOnSuccessListener
+                    }
                     driveAuthLauncher.launch(
                         IntentSenderRequest.Builder(pendingIntent.intentSender).build()
                     )
@@ -193,10 +197,10 @@ class MainActivity : ComponentActivity() {
         // access" list. Note this limitation in the Task 4 verification report; it's an
         // accurate description of what v1 does, not a bug to silently paper over.
         val token = lastAccessToken
+        lastAccessToken = null
         if (token != null) {
             Identity.getAuthorizationClient(this)
                 .clearToken(ClearTokenRequest.builder().setToken(token).build())
-                .addOnSuccessListener { lastAccessToken = null }
                 .addOnFailureListener { e -> Log.w("MainActivity", "Drive clearToken failed", e) }
         }
         viewModel.disconnectDrive()
