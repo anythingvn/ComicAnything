@@ -89,15 +89,13 @@ fun EpubReaderScreen(
                                 override fun onPageFinished(view: WebView, url: String?) {
                                     super.onPageFinished(view, url)
                                     view.post {
-                                        val contentHeightPx = (view.contentHeight * density).toInt()
-                                        val maxScroll = contentHeightPx - view.height
-                                        if (maxScroll > 0 && resumePercentage > 0f) {
-                                            view.scrollTo(0, (maxScroll * resumePercentage).toInt())
-                                        }
                                         view.evaluateJavascript(
                                             buildThemeJs(viewModel.uiState.value.filterMode),
                                             null
                                         )
+                                        if (resumePercentage > 0f) {
+                                            restoreScrollWhenLaidOut(view, density, resumePercentage, attempt = 0)
+                                        }
                                     }
                                 }
                             }
@@ -202,6 +200,48 @@ fun EpubReaderScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Maximum number of retries when polling for a laid-out page height before giving up on
+ * restoring scroll position. At ~100ms per attempt this caps the wait at ~1.5s.
+ */
+private const val MAX_RESUME_SCROLL_ATTEMPTS = 15
+private const val RESUME_SCROLL_RETRY_DELAY_MS = 100L
+
+/**
+ * Restores the WebView's scroll position to [resumePercentage] of the page height, once the
+ * page has genuinely finished layout.
+ *
+ * `view.contentHeight` (a native Android WebView property) is not reliable immediately after
+ * `onPageFinished` + one `view.post {}` frame: on a page load served from WebView's internal
+ * cache (e.g. reopening the same asset-loader URL), `onPageFinished` can fire before layout has
+ * settled, leaving `contentHeight` at 0 for that first frame. `document.documentElement.scrollHeight`
+ * read via `evaluateJavascript` is more trustworthy because its callback only fires after the JS
+ * engine has actually evaluated the expression against the current DOM/layout state, so polling
+ * it converges on the true height instead of trusting a single native read. If the height never
+ * becomes available within the retry budget, this gives up silently rather than scrolling to a
+ * wrong position or hanging.
+ */
+private fun restoreScrollWhenLaidOut(
+    view: WebView,
+    density: Float,
+    resumePercentage: Float,
+    attempt: Int
+) {
+    view.evaluateJavascript("document.documentElement.scrollHeight.toString()") { result ->
+        val scrollHeightCss = result?.trim('"')?.toIntOrNull() ?: 0
+        val contentHeightPx = (scrollHeightCss * density).toInt()
+        val maxScroll = contentHeightPx - view.height
+        if (maxScroll > 0) {
+            view.scrollTo(0, (maxScroll * resumePercentage).toInt())
+        } else if (attempt < MAX_RESUME_SCROLL_ATTEMPTS) {
+            view.postDelayed(
+                { restoreScrollWhenLaidOut(view, density, resumePercentage, attempt + 1) },
+                RESUME_SCROLL_RETRY_DELAY_MS
+            )
         }
     }
 }
