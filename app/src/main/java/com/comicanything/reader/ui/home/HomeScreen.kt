@@ -1,5 +1,6 @@
 package com.comicanything.reader.ui.home
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
+import com.comicanything.reader.ui.reader.CoverLoadState
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
 
@@ -161,6 +165,7 @@ fun HomeScreen(
             when (homeScreenState.selectedTab) {
                 0 -> LibraryContent(
                     state = state,
+                    viewModel = viewModel,
                     comics = filteredLibraryComics,
                     selectedFormats = homeScreenState.selectedFormats,
                     onFormatToggle = { format ->
@@ -174,6 +179,7 @@ fun HomeScreen(
                 1 -> DriveContent(state, driveUrlInput, onInputChange = { driveUrlInput = it }, onFetch = { viewModel.fetchDriveFolder(driveUrlInput) }, onOpenComic, onConnectDrive, onDisconnectDrive)
                 2 -> LocalFilesContent(
                     state = state,
+                    viewModel = viewModel,
                     comics = filteredLibraryComics,
                     selectedFormats = homeScreenState.selectedFormats,
                     onFormatToggle = { format ->
@@ -226,8 +232,41 @@ fun PermissionRequiredCard(onRequestPermission: () -> Unit) {
 }
 
 @Composable
+fun ComicCoverThumbnail(
+    comic: ComicItem,
+    viewModel: ReaderViewModel,
+    modifier: Modifier = Modifier,
+    iconSize: androidx.compose.ui.unit.Dp = 64.dp,
+    iconTint: Color = Color.White.copy(alpha = 0.3f)
+) {
+    val coverState by produceState<CoverLoadState>(initialValue = CoverLoadState.Loading, key1 = comic.id) {
+        value = viewModel.loadCoverThumbnail(comic)
+    }
+    when (val state = coverState) {
+        is CoverLoadState.Loaded -> Image(
+            bitmap = state.bitmap.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
+        CoverLoadState.Loading, CoverLoadState.Unavailable -> Box(
+            modifier = modifier,
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Book,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(iconSize)
+            )
+        }
+    }
+}
+
+@Composable
 fun LibraryContent(
     state: ReaderUiState,
+    viewModel: ReaderViewModel,
     comics: List<ComicItem>,
     selectedFormats: Set<ComicFormat>,
     onFormatToggle: (ComicFormat) -> Unit,
@@ -286,11 +325,12 @@ fun LibraryContent(
                                     .background(Color(0xFF2C2C2C)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Book,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(48.dp)
+                                ComicCoverThumbnail(
+                                    comic = comic,
+                                    viewModel = viewModel,
+                                    modifier = Modifier.fillMaxSize(),
+                                    iconSize = 48.dp,
+                                    iconTint = Color.White.copy(alpha = 0.5f)
                                 )
                             }
                             Column(modifier = Modifier.padding(8.dp)) {
@@ -337,7 +377,7 @@ fun LibraryContent(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(comics) { comic ->
-                    ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+                    ComicGridCard(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
                 }
             }
         } else {
@@ -346,7 +386,7 @@ fun LibraryContent(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(comics) { comic ->
-                    ComicListRow(comic = comic, onClick = { onOpenComic(comic) })
+                    ComicListRow(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
                 }
             }
         }
@@ -389,7 +429,7 @@ fun FormatFilterRow(
 }
 
 @Composable
-fun ComicGridCard(comic: ComicItem, onClick: () -> Unit) {
+fun ComicGridCard(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .height(200.dp)
@@ -405,11 +445,12 @@ fun ComicGridCard(comic: ComicItem, onClick: () -> Unit) {
                     .background(Color(0xFF1E2638)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Book,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.3f),
-                    modifier = Modifier.size(64.dp)
+                ComicCoverThumbnail(
+                    comic = comic,
+                    viewModel = viewModel,
+                    modifier = Modifier.fillMaxSize(),
+                    iconSize = 64.dp,
+                    iconTint = Color.White.copy(alpha = 0.3f)
                 )
                 Surface(
                     modifier = Modifier
@@ -441,7 +482,7 @@ fun ComicGridCard(comic: ComicItem, onClick: () -> Unit) {
 }
 
 @Composable
-fun ComicListRow(comic: ComicItem, onClick: () -> Unit) {
+fun ComicListRow(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Unit) {
     ListItem(
         headlineContent = {
             Text(
@@ -453,7 +494,15 @@ fun ComicListRow(comic: ComicItem, onClick: () -> Unit) {
             )
         },
         leadingContent = {
-            Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            ComicCoverThumbnail(
+                comic = comic,
+                viewModel = viewModel,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                iconSize = 20.dp,
+                iconTint = MaterialTheme.colorScheme.primary
+            )
         },
         trailingContent = {
             Surface(
@@ -576,6 +625,7 @@ fun DriveContent(
 @Composable
 fun LocalFilesContent(
     state: ReaderUiState,
+    viewModel: ReaderViewModel,
     comics: List<ComicItem>,
     selectedFormats: Set<ComicFormat>,
     onFormatToggle: (ComicFormat) -> Unit,
@@ -624,7 +674,7 @@ fun LocalFilesContent(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(comics) { comic ->
-                    ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+                    ComicGridCard(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
                 }
             }
         } else {
@@ -633,7 +683,7 @@ fun LocalFilesContent(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(comics) { comic ->
-                    ComicListRow(comic = comic, onClick = { onOpenComic(comic) })
+                    ComicListRow(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
                 }
             }
         }
