@@ -767,7 +767,7 @@ class ReaderViewModelTest {
     @Test
     fun `opening an EPUB comic uses the injected extractor and populates epubBook`() = runTest {
         val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
-        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val combinedFile = File(extractedDir, "__combined.html").apply { writeText("<html></html>") }
         val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
@@ -824,7 +824,7 @@ class ReaderViewModelTest {
     @Test
     fun `closeComic deletes the extracted EPUB directory`() = runTest {
         val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
-        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val combinedFile = File(extractedDir, "__combined.html").apply { writeText("<html></html>") }
         val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
@@ -862,7 +862,7 @@ class ReaderViewModelTest {
         )
         val progressRepo = ReadingProgressRepository(progressDataStore, ioDispatcher = Dispatchers.Unconfined)
         val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
-        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val combinedFile = File(extractedDir, "__combined.html").apply { writeText("<html></html>") }
         val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
         val comic = ComicItem(
             id = "scroll-comic",
@@ -893,7 +893,7 @@ class ReaderViewModelTest {
     fun `setEpubScrollProgress clamps values outside 0 to 1`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
-        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val combinedFile = File(extractedDir, "__combined.html").apply { writeText("<html></html>") }
         val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -929,7 +929,7 @@ class ReaderViewModelTest {
             zos.closeEntry()
         }
         val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
-        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val combinedFile = File(extractedDir, "__combined.html").apply { writeText("<html></html>") }
         val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -982,7 +982,7 @@ class ReaderViewModelTest {
     fun `opening a CBZ comic deletes a previously active EPUB's extracted directory`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val extractedDir = tempFolder.newFolder("epub-extracted-${System.nanoTime()}")
-        val combinedFile = File(extractedDir, "__combined.xhtml").apply { writeText("<html></html>") }
+        val combinedFile = File(extractedDir, "__combined.html").apply { writeText("<html></html>") }
         val fakeBook = EpubBook(extractedDir = extractedDir, combinedHtmlFile = combinedFile)
         val comicFile = File(tempFolder.newFolder("Comics"), "after-epub.cbz")
         java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->

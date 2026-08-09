@@ -45,7 +45,16 @@ suspend fun extractEpub(epubFile: File, extractionDir: File): EpubBook? = withCo
         val chapterFiles = parseOpfForSpineFiles(opfFile, opfDir)
         if (chapterFiles.isEmpty()) return@withContext null
 
-        val combinedFile = File(opfDir, "__combined.xhtml")
+        // Named ".html" (not ".xhtml") so androidx.webkit.WebViewAssetLoader's
+        // InternalStoragePathHandler -- which relies on
+        // URLConnection.guessContentTypeFromName()'s built-in extension table to set the
+        // response Content-Type -- serves this as "text/html". That table has no entry for
+        // ".xhtml", so WebView receives a response with no usable Content-Type and falls back
+        // to rendering it as raw XML (Chrome's "This XML file does not appear to have any
+        // style information..." viewer) instead of styled HTML5, even though the markup
+        // content is fully correct. WebView/Chromium renders XHTML-flavored markup fine under
+        // an HTML content-type, so renaming the file is sufficient; no markup change needed.
+        val combinedFile = File(opfDir, "__combined.html")
         writeCombinedDocument(chapterFiles, combinedFile)
 
         EpubBook(extractedDir = extractionDir, combinedHtmlFile = combinedFile)
