@@ -67,6 +67,14 @@ dependencies {
     // Image & Media Loading (Coil for Compose)
     implementation("io.coil-kt:coil-compose:2.5.0")
 
+    // WebView asset loading (EPUB rendering)
+    // NOTE: pinned to 1.15.0, not the newer 1.16.0 -- 1.16.0's POM directly depends on
+    // kotlin-stdlib 2.1.20, whose class metadata (format 2.1.0) this project's Kotlin Gradle
+    // Plugin (1.9.22, compiler can read up to format 2.0.0) cannot read, breaking
+    // compileDebugKotlin project-wide. 1.15.0 is a pure-Java artifact (no Kotlin dependency)
+    // and exposes the same WebViewAssetLoader/WebViewClientCompat APIs used here.
+    implementation("androidx.webkit:webkit:1.15.0")
+
     // Networking & HTTP (For Google Drive REST API)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

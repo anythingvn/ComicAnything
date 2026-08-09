@@ -15,8 +15,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.ui.home.HomeScreen
 import com.comicanything.reader.ui.home.rememberHomeScreenState
+import com.comicanything.reader.ui.reader.EpubReaderScreen
 import com.comicanything.reader.ui.reader.ReaderScreen
 import com.comicanything.reader.ui.reader.ReaderViewModel
 import com.comicanything.reader.ui.theme.ComicAnythingTheme
@@ -67,20 +69,25 @@ class MainActivity : ComponentActivity() {
                     val state by viewModel.uiState.collectAsState()
                     val homeScreenState = rememberHomeScreenState()
 
-                    if (state.activeComic != null) {
-                        ReaderScreen(
-                            comic = state.activeComic!!,
-                            viewModel = viewModel,
-                            onBack = { viewModel.closeComic() }
-                        )
-                    } else {
-                        HomeScreen(
+                    val activeComic = state.activeComic
+                    when {
+                        activeComic == null -> HomeScreen(
                             viewModel = viewModel,
                             homeScreenState = homeScreenState,
                             onOpenComic = { comic -> viewModel.openComic(comic) },
                             onRequestPermission = { requestStoragePermission() },
                             onConnectDrive = { connectDrive() },
                             onDisconnectDrive = { disconnectDrive() }
+                        )
+                        activeComic.format == ComicFormat.EPUB -> EpubReaderScreen(
+                            comic = activeComic,
+                            viewModel = viewModel,
+                            onBack = { viewModel.closeComic() }
+                        )
+                        else -> ReaderScreen(
+                            comic = activeComic,
+                            viewModel = viewModel,
+                            onBack = { viewModel.closeComic() }
                         )
                     }
                 }
