@@ -66,7 +66,7 @@ anything that assumes the app can read files on a real device.
 - [x] Add a Google sign-in trigger (`DriveContent`'s "Connect"/"Disconnect", `MainActivity`'s OAuth wiring) — supersedes the originally-scoped API key input, which doesn't fit an OAuth model
 - [x] Persist a lightweight "was connected" hint locally (DataStore, from Epic 3) — deliberately not the access token itself, which is short-lived and re-fetched each session
 - [ ] Implement on-demand streaming/caching of the actual Drive file bytes (currently only a `webContentLink` URL is stored — no download, no local cache, no offline read path) — sub-project 2
-- [ ] Add error/empty states for an invalid folder ID, network failure, or missing/invalid API key (currently any failure just silently falls back to the one sample PDF) — sub-project 2
+- [ ] Add error/empty states for an invalid folder ID, network failure, or the Drive connection being unavailable (currently any failure just silently falls back to the one sample PDF) — sub-project 2
 - [ ] **Follow-up:** full server-side grant revocation (`AuthorizationClient.revokeAccess`) — sub-project 1's disconnect uses `clearToken()` instead, since `revokeAccess()` needs an `Account` object this flow has no confirmed way to obtain; documented limitation, not a blocking bug
 - [ ] **Follow-up:** resolve the signed-in account's real email for display — currently always shows a plain "Connected" with no email, deliberately deferred rather than guessed at during design
 
