@@ -10,7 +10,7 @@ This is explicitly an **optional, opt-in feature** — ComicAnything's core iden
 
 ## Scope
 
-- **In scope:** a "Connect Google Drive" trigger on the Drive tab; the OAuth authorization flow requesting read-only Drive access; a signed-in/signed-out UI state (including "Connected as `[email]`"); a disconnect action that revokes the grant; a lightweight local cache of "was connected, as this email" so the UI has something to show immediately (including offline) rather than blocking on a live network check every time; a written prerequisite doc (Google Cloud Console setup) for the project owner to complete on their own.
+- **In scope:** a "Connect Google Drive" trigger on the Drive tab; the OAuth authorization flow requesting read-only Drive access; a signed-in/signed-out UI state (including "Connected as `[email]`"); a disconnect action that clears the locally-cached grant (see Components below for why this sub-project stops short of full server-side revocation); a lightweight local cache of "was connected, as this email" so the UI has something to show immediately (including offline) rather than blocking on a live network check every time; a written prerequisite doc (Google Cloud Console setup) for the project owner to complete on their own.
 - **Out of scope (deferred to sub-project 2):** listing/browsing actual Drive files, downloading/streaming comic bytes, wiring a Drive comic into the reader, Drive-specific error states beyond the sign-in flow itself (file-list/download errors belong to sub-project 2).
 - **Explicitly not building:** a backend server, refresh-token exchange, or "offline access" (`serverAuthCode`) — those exist to let a *server* keep working on the user's behalf after the user closes the client. This app has no server; the client re-requests a fresh access token from Google Play Services each time it needs one, which Play Services satisfies silently (no UI) as long as the prior grant is still valid.
 
@@ -85,11 +85,12 @@ private val driveAuthLauncher = registerForActivityResult(
 
 **Silent re-check on each app session** (e.g. when the Drive tab is opened, or on `onResume` alongside the existing storage-permission re-check in `MainActivity.kt:58-64`): call `authorize()` again. If the prior grant is still valid, Play Services returns a fresh access token with `hasResolution() == false` and no UI is shown — this is the mechanism that makes "staying signed in across app restarts" work, with no token persistence of our own required.
 
-**Disconnect:**
+**Disconnect (corrected during plan-writing — see [the implementation plan](../plans/2026-08-09-drive-signin.md) for the full account):** `AuthorizationClient.revokeAccess(RevokeAccessRequest)` would fully revoke the grant server-side, but its builder requires `.setAccount(account)` with no access-token-based alternative, and this flow (Authorization only, no separate Credential Manager identity sign-in) has no confirmed way to obtain that `Account` object without adding a whole extra sign-in step — that's a real scope question for a future task, not something to guess at in this sub-project. What's used instead:
 ```kotlin
 Identity.getAuthorizationClient(activity)
-    .revokeAccess(RevokeAccessRequest.builder().setAccount(account).build())
+    .clearToken(ClearTokenRequest.builder().setToken(lastKnownAccessToken).build())
 ```
+This takes the access token string directly (already held in memory from the last `authorize()` call) and clears Play Services' local cache of the grant — correctly making the app "forget" the connection and preventing the silent `onResume` re-check from finding a still-valid cached token and reconnecting the user against their wishes. It does **not** remove the app from the user's Google Account "Third-party apps with access" list — that's a known, documented limitation of this sub-project, not a bug to silently paper over. Full server-side revocation (resolving the `Account`-object question) is a reasonable candidate for a follow-up task if it matters enough to prioritize.
 
 ### Local "last known state" cache (not a token store)
 
@@ -106,7 +107,7 @@ Persisted via the same DataStore infrastructure Epic 3 introduced (`androidx.dat
 
 Flow: on `onDriveAuthorized(accessToken)`, write `DriveConnectionHint(isConnected = true, accountEmail = email)` and on `onDisconnect()`, write `DriveConnectionHint(isConnected = false, accountEmail = null)`. On app launch, read the hint immediately for optimistic UI, then reconcile with a live silent `authorize()` call shortly after.
 
-**Open question for implementation, not resolved by the fetched documentation:** exactly where the signed-in account's email address comes from wasn't confirmed by research for this doc — the fetched `AuthorizationResult` fields covered `accessToken`, `hasResolution()`, `pendingIntent`, and `serverAuthCode`, with no explicit account/email field. It may come from a separate Credential Manager sign-in step (basic identity, run once alongside or before the Drive authorization request), from decoding an ID token, or from a follow-up call to a Google userinfo/People API endpoint using the access token. Confirm the actual mechanism against current docs at implementation time; if getting the email turns out to add real complexity, the UI can fall back to a generic "Connected" state without the email rather than blocking the feature on it — `accountEmail` in `DriveConnectionHint` is nullable specifically to allow that fallback.
+**Resolved during plan-writing (deferred, not guessed at):** exactly where the signed-in account's email address comes from wasn't confirmed by research for this doc — the fetched `AuthorizationResult` fields covered `accessToken`, `hasResolution()`, `pendingIntent`, and `serverAuthCode`, with no explicit account/email field. It may come from a separate Credential Manager sign-in step (basic identity, run once alongside or before the Drive authorization request), from decoding an ID token, or from a follow-up call to a Google userinfo/People API endpoint using the access token. Rather than guess, [the implementation plan](../plans/2026-08-09-drive-signin.md) has this sub-project always pass a `null` email and show a plain "Connected" state — `accountEmail` in `DriveConnectionHint` is nullable specifically for this fallback. Resolving the real email is left as a well-scoped candidate for a future task, not blocking this one.
 
 ### ViewModel / UI wiring
 
