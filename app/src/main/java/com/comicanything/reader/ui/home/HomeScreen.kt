@@ -3,6 +3,7 @@ package com.comicanything.reader.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -10,10 +11,13 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -51,23 +55,56 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
     var driveUrlInput by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+    var selectedFormats by remember { mutableStateOf(setOf<ComicFormat>()) }
+    var isGridLayout by remember { mutableStateOf(true) }
+
+    val filteredLibraryComics = state.libraryComics.filtered(searchQuery, selectedFormats)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Book,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(end = 8.dp)
+                    if (isSearchActive) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search your library...") },
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        Text(
-                            text = "ComicAnything",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Book,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Text(
+                                text = "ComicAnything",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
+                        }
+                    }
+                },
+                actions = {
+                    if (isSearchActive) {
+                        IconButton(onClick = { isSearchActive = false; searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close search")
+                        }
+                    } else {
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -107,9 +144,31 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             when (selectedTab) {
-                0 -> LibraryContent(state, onOpenComic, onRequestPermission)
+                0 -> LibraryContent(
+                    state = state,
+                    comics = filteredLibraryComics,
+                    selectedFormats = selectedFormats,
+                    onFormatToggle = { format ->
+                        selectedFormats = if (format in selectedFormats) selectedFormats - format else selectedFormats + format
+                    },
+                    isGridLayout = isGridLayout,
+                    onToggleLayout = { isGridLayout = !isGridLayout },
+                    onOpenComic = onOpenComic,
+                    onRequestPermission = onRequestPermission
+                )
                 1 -> DriveContent(state, driveUrlInput, onInputChange = { driveUrlInput = it }, onFetch = { viewModel.fetchDriveFolder(driveUrlInput) }, onOpenComic, onConnectDrive, onDisconnectDrive)
-                2 -> LocalFilesContent(state, onOpenComic, onRequestPermission)
+                2 -> LocalFilesContent(
+                    state = state,
+                    comics = filteredLibraryComics,
+                    selectedFormats = selectedFormats,
+                    onFormatToggle = { format ->
+                        selectedFormats = if (format in selectedFormats) selectedFormats - format else selectedFormats + format
+                    },
+                    isGridLayout = isGridLayout,
+                    onToggleLayout = { isGridLayout = !isGridLayout },
+                    onOpenComic = onOpenComic,
+                    onRequestPermission = onRequestPermission
+                )
             }
         }
     }
@@ -154,6 +213,11 @@ fun PermissionRequiredCard(onRequestPermission: () -> Unit) {
 @Composable
 fun LibraryContent(
     state: ReaderUiState,
+    comics: List<ComicItem>,
+    selectedFormats: Set<ComicFormat>,
+    onFormatToggle: (ComicFormat) -> Unit,
+    isGridLayout: Boolean,
+    onToggleLayout: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onRequestPermission: () -> Unit
 ) {
@@ -169,13 +233,15 @@ fun LibraryContent(
         return
     }
 
-    val inProgress = state.libraryComics.filter { it.currentPage > 1 }
+    val inProgress = comics.filter { it.currentPage > 1 }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        FormatFilterRow(selectedFormats = selectedFormats, onFormatToggle = onFormatToggle, isGridLayout = isGridLayout, onToggleLayout = onToggleLayout)
+
         if (inProgress.isNotEmpty()) {
             Text(
                 text = "⚡ CONTINUE READING",
@@ -248,15 +314,61 @@ fun LibraryContent(
             modifier = Modifier.padding(bottom = 12.dp)
         )
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(state.libraryComics) { comic ->
-                ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+        if (isGridLayout) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(comics) { comic ->
+                    ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+                }
             }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(comics) { comic ->
+                    ComicListRow(comic = comic, onClick = { onOpenComic(comic) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FormatFilterRow(
+    selectedFormats: Set<ComicFormat>,
+    onFormatToggle: (ComicFormat) -> Unit,
+    isGridLayout: Boolean,
+    onToggleLayout: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp)
+    ) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            items(ComicFormat.entries) { format ->
+                FilterChip(
+                    selected = format in selectedFormats,
+                    onClick = { onFormatToggle(format) },
+                    label = { Text(format.name) }
+                )
+            }
+        }
+        IconButton(onClick = onToggleLayout) {
+            Icon(
+                imageVector = if (isGridLayout) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                contentDescription = if (isGridLayout) "Switch to list view" else "Switch to grid view",
+                tint = MaterialTheme.colorScheme.primary
+            )
         }
     }
 }
@@ -311,6 +423,42 @@ fun ComicGridCard(comic: ComicItem, onClick: () -> Unit) {
             )
         }
     }
+}
+
+@Composable
+fun ComicListRow(comic: ComicItem, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = {
+            Text(
+                text = comic.title,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        leadingContent = {
+            Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        },
+        trailingContent = {
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = Color.Black.copy(alpha = 0.8f)
+            ) {
+                Text(
+                    text = comic.format.name,
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .background(MaterialTheme.colorScheme.surface)
+    )
 }
 
 @Composable
@@ -413,6 +561,11 @@ fun DriveContent(
 @Composable
 fun LocalFilesContent(
     state: ReaderUiState,
+    comics: List<ComicItem>,
+    selectedFormats: Set<ComicFormat>,
+    onFormatToggle: (ComicFormat) -> Unit,
+    isGridLayout: Boolean,
+    onToggleLayout: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onRequestPermission: () -> Unit
 ) {
@@ -441,16 +594,33 @@ fun LocalFilesContent(
         return
     }
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        items(state.libraryComics) { comic ->
-            ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+        FormatFilterRow(selectedFormats = selectedFormats, onFormatToggle = onFormatToggle, isGridLayout = isGridLayout, onToggleLayout = onToggleLayout)
+
+        if (isGridLayout) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(comics) { comic ->
+                    ComicGridCard(comic = comic, onClick = { onOpenComic(comic) })
+                }
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(comics) { comic ->
+                    ComicListRow(comic = comic, onClick = { onOpenComic(comic) })
+                }
+            }
         }
     }
 }
