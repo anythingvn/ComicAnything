@@ -16,6 +16,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.comicanything.reader.ui.home.HomeScreen
+import com.comicanything.reader.ui.home.rememberHomeScreenState
 import com.comicanything.reader.ui.reader.ReaderScreen
 import com.comicanything.reader.ui.reader.ReaderViewModel
 import com.comicanything.reader.ui.theme.ComicAnythingTheme
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val state by viewModel.uiState.collectAsState()
+                    val homeScreenState = rememberHomeScreenState()
 
                     if (state.activeComic != null) {
                         ReaderScreen(
@@ -74,6 +76,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         HomeScreen(
                             viewModel = viewModel,
+                            homeScreenState = homeScreenState,
                             onOpenComic = { comic -> viewModel.openComic(comic) },
                             onRequestPermission = { requestStoragePermission() },
                             onConnectDrive = { connectDrive() },

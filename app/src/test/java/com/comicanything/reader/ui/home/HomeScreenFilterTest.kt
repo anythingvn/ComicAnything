@@ -76,4 +76,11 @@ class HomeScreenFilterTest {
 
         assertEquals(emptyList<ComicItem>(), result)
     }
+
+    @Test
+    fun `query with trailing whitespace still matches`() {
+        val result = library.filtered(query = "bat ", formats = emptySet())
+
+        assertEquals(listOf(batman), result)
+    }
 }

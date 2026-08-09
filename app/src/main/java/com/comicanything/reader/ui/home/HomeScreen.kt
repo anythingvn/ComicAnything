@@ -37,39 +37,48 @@ import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
 
-internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> =
-    filter { comic ->
+internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> {
+    val trimmedQuery = query.trim()
+    return filter { comic ->
         (formats.isEmpty() || comic.format in formats) &&
-            (query.isBlank() || comic.title.contains(query, ignoreCase = true))
+            (trimmedQuery.isEmpty() || comic.title.contains(trimmedQuery, ignoreCase = true))
     }
+}
+
+class HomeScreenState {
+    var selectedTab by mutableIntStateOf(0)
+    var searchQuery by mutableStateOf("")
+    var isSearchActive by mutableStateOf(false)
+    var selectedFormats by mutableStateOf(setOf<ComicFormat>())
+    var isGridLayout by mutableStateOf(true)
+}
+
+@Composable
+fun rememberHomeScreenState(): HomeScreenState = remember { HomeScreenState() }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: ReaderViewModel,
+    homeScreenState: HomeScreenState,
     onOpenComic: (ComicItem) -> Unit,
     onRequestPermission: () -> Unit,
     onConnectDrive: () -> Unit,
     onDisconnectDrive: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
-    var selectedTab by remember { mutableIntStateOf(0) }
     var driveUrlInput by remember { mutableStateOf("") }
-    var searchQuery by remember { mutableStateOf("") }
-    var isSearchActive by remember { mutableStateOf(false) }
-    var selectedFormats by remember { mutableStateOf(setOf<ComicFormat>()) }
-    var isGridLayout by remember { mutableStateOf(true) }
 
-    val filteredLibraryComics = state.libraryComics.filtered(searchQuery, selectedFormats)
+    val filteredLibraryComics = state.libraryComics.filtered(homeScreenState.searchQuery, homeScreenState.selectedFormats)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    if (isSearchActive) {
+                    if (homeScreenState.isSearchActive && homeScreenState.selectedTab != 1) {
                         TextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
+                            value = homeScreenState.searchQuery,
+                            onValueChange = { homeScreenState.searchQuery = it },
                             placeholder = { Text("Search your library...") },
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
@@ -97,13 +106,15 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    if (isSearchActive) {
-                        IconButton(onClick = { isSearchActive = false; searchQuery = "" }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close search")
-                        }
-                    } else {
-                        IconButton(onClick = { isSearchActive = true }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
+                    if (homeScreenState.selectedTab != 1) {
+                        if (homeScreenState.isSearchActive) {
+                            IconButton(onClick = { homeScreenState.isSearchActive = false; homeScreenState.searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close search")
+                            }
+                        } else {
+                            IconButton(onClick = { homeScreenState.isSearchActive = true }) {
+                                Icon(Icons.Default.Search, contentDescription = "Search")
+                            }
                         }
                     }
                 },
@@ -119,20 +130,24 @@ fun HomeScreen(
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.CollectionsBookmark, contentDescription = null) },
                     label = { Text("Library") },
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 }
+                    selected = homeScreenState.selectedTab == 0,
+                    onClick = { homeScreenState.selectedTab = 0 }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
                     label = { Text("Google Drive") },
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 }
+                    selected = homeScreenState.selectedTab == 1,
+                    onClick = {
+                        homeScreenState.selectedTab = 1
+                        homeScreenState.isSearchActive = false
+                        homeScreenState.searchQuery = ""
+                    }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Folder, contentDescription = null) },
                     label = { Text("Local Files") },
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 }
+                    selected = homeScreenState.selectedTab == 2,
+                    onClick = { homeScreenState.selectedTab = 2 }
                 )
             }
         }
@@ -143,16 +158,16 @@ fun HomeScreen(
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            when (selectedTab) {
+            when (homeScreenState.selectedTab) {
                 0 -> LibraryContent(
                     state = state,
                     comics = filteredLibraryComics,
-                    selectedFormats = selectedFormats,
+                    selectedFormats = homeScreenState.selectedFormats,
                     onFormatToggle = { format ->
-                        selectedFormats = if (format in selectedFormats) selectedFormats - format else selectedFormats + format
+                        homeScreenState.selectedFormats = if (format in homeScreenState.selectedFormats) homeScreenState.selectedFormats - format else homeScreenState.selectedFormats + format
                     },
-                    isGridLayout = isGridLayout,
-                    onToggleLayout = { isGridLayout = !isGridLayout },
+                    isGridLayout = homeScreenState.isGridLayout,
+                    onToggleLayout = { homeScreenState.isGridLayout = !homeScreenState.isGridLayout },
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )
@@ -160,12 +175,12 @@ fun HomeScreen(
                 2 -> LocalFilesContent(
                     state = state,
                     comics = filteredLibraryComics,
-                    selectedFormats = selectedFormats,
+                    selectedFormats = homeScreenState.selectedFormats,
                     onFormatToggle = { format ->
-                        selectedFormats = if (format in selectedFormats) selectedFormats - format else selectedFormats + format
+                        homeScreenState.selectedFormats = if (format in homeScreenState.selectedFormats) homeScreenState.selectedFormats - format else homeScreenState.selectedFormats + format
                     },
-                    isGridLayout = isGridLayout,
-                    onToggleLayout = { isGridLayout = !isGridLayout },
+                    isGridLayout = homeScreenState.isGridLayout,
+                    onToggleLayout = { homeScreenState.isGridLayout = !homeScreenState.isGridLayout },
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )
