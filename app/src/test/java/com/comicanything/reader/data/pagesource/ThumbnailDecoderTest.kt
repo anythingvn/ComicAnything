@@ -45,13 +45,6 @@ class ThumbnailDecoderTest {
     }
 
     @Test
-    fun `returns null for a MOBI comic`() = runTest {
-        val result = decodeThumbnail(comic(ComicFormat.MOBI))
-
-        assertNull(result)
-    }
-
-    @Test
     fun `sample size is 1 when the actual width is already at or below the target`() {
         assertEquals(1, calculateThumbnailSampleSize(actualWidth = 240, targetWidth = 240))
         assertEquals(1, calculateThumbnailSampleSize(actualWidth = 100, targetWidth = 240))

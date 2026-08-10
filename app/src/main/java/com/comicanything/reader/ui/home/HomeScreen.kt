@@ -220,7 +220,7 @@ fun PermissionRequiredCard(onRequestPermission: () -> Unit) {
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "ComicAnything needs access to your device storage to find PDF, CBZ, CBR, EPUB, and MOBI files.",
+            text = "ComicAnything needs access to your device storage to find PDF, CBZ, CBR, and EPUB files.",
             color = Color.Gray,
             fontSize = 13.sp,
             textAlign = TextAlign.Center
@@ -654,7 +654,7 @@ fun LocalFilesContent(
     if (state.libraryComics.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
-                text = "No comics found on this device.\nAdd PDF, CBZ, CBR, EPUB, or MOBI files to your storage.",
+                text = "No comics found on this device.\nAdd PDF, CBZ, CBR, or EPUB files to your storage.",
                 color = Color.Gray,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,

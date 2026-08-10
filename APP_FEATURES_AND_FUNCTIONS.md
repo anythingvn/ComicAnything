@@ -16,7 +16,7 @@ It is designed specifically as a private, standalone app (compiling to an `.apk`
 
 ### 2. ☁️ Google Drive Direct Folder Integration
 - **Link Specific Folders**: Paste any Google Drive shared folder link or folder ID (e.g. `https://drive.google.com/drive/folders/1ABC...`).
-- **REST API v3 Querying**: Indexes PDFs, CBZ archives, EPUBs, and MOBI files directly inside the linked Google Drive directory.
+- **REST API v3 Querying**: Indexes PDFs, CBZ archives, and EPUBs directly inside the linked Google Drive directory.
 - **On-Demand Streaming & Caching**: Stream comic PDF pages directly over HTTP or cache files locally for offline reading without manual downloading.
 
 ---
@@ -26,7 +26,7 @@ It is designed specifically as a private, standalone app (compiling to an `.apk`
 - **Multi-Format Support**:
   - 📄 **PDF**: Native PDF rendering with hardware acceleration.
   - 📦 **CBZ & CBR**: Comic Book Zip/Rar archive extraction.
-  - 📚 **EPUB & MOBI**: Digital ebook reflowable format support.
+  - 📚 **EPUB**: Digital ebook reflowable format support. (MOBI was evaluated and formally descoped — see `PROJECT_TASKS.md` Epic 5 — no viable pure-Kotlin/Java parser exists, and the only real option requires native C/JNI code for a declining legacy format EPUB already supersedes.)
 
 ---
 

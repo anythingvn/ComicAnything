@@ -175,9 +175,9 @@ class ReaderViewModelTest {
         val comic = ComicItem(
             id = "1",
             title = "Unsupported Book",
-            pathOrUrl = "/fake/path.mobi",
+            pathOrUrl = "/fake/path.cbr",
             source = ComicSource.LOCAL,
-            format = ComicFormat.MOBI
+            format = ComicFormat.CBR
         )
 
         viewModel.openComic(comic)

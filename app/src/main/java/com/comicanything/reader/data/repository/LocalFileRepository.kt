@@ -45,7 +45,6 @@ class LocalFileRepository(
         name.endsWith(".cbz", ignoreCase = true) -> ComicFormat.CBZ
         name.endsWith(".cbr", ignoreCase = true) -> ComicFormat.CBR
         name.endsWith(".epub", ignoreCase = true) -> ComicFormat.EPUB
-        name.endsWith(".mobi", ignoreCase = true) -> ComicFormat.MOBI
         else -> null
     }
 }

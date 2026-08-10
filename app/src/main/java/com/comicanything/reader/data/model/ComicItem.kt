@@ -9,8 +9,7 @@ enum class ComicFormat {
     PDF,
     CBZ,
     CBR,
-    EPUB,
-    MOBI
+    EPUB
 }
 
 enum class ReadingMode {
