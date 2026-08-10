@@ -40,6 +40,7 @@ import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.ui.reader.CoverLoadState
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
+import kotlin.math.roundToInt
 
 internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> {
     val trimmedQuery = query.trim()
@@ -287,7 +288,7 @@ fun LibraryContent(
         return
     }
 
-    val inProgress = comics.filter { it.currentPage > 1 }
+    val inProgress = comics.filter { it.currentPage > 1 || it.progressPercentage > 0f }
 
     Column(
         modifier = Modifier
@@ -350,7 +351,11 @@ fun LibraryContent(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = "Page ${comic.currentPage}/${comic.totalPages}",
+                                    text = if (comic.format == ComicFormat.EPUB) {
+                                        "${(comic.progressPercentage * 100).roundToInt()}%"
+                                    } else {
+                                        "Page ${comic.currentPage}/${comic.totalPages}"
+                                    },
                                     fontSize = 10.sp,
                                     color = Color.Gray
                                 )

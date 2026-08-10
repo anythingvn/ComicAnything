@@ -8,7 +8,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
@@ -29,6 +31,9 @@ import androidx.webkit.WebViewClientCompat
 import com.comicanything.reader.data.model.ColorFilterMode
 import com.comicanything.reader.data.model.ComicItem
 import java.io.File
+
+/** Origin WebViewAssetLoader serves local EPUB content from; nothing else may be navigated to. */
+private const val ASSET_LOADER_ORIGIN = "https://appassets.androidplatform.net/"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,7 +79,16 @@ fun EpubReaderScreen(
 
                         WebView(ctx).apply {
                             settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
+                            settings.domStorageEnabled = false // unused by this reader, disable unused capability
+                            // Real network fetches are never needed: WebViewAssetLoader's
+                            // shouldInterceptRequest below answers every /epub/ request BEFORE it
+                            // would hit the network, so local asset loading is unaffected. This
+                            // blocks EPUB-embedded JS/CSS/img references from ever reaching the
+                            // live internet (tracking pixels, exfiltration, etc.) -- this app is
+                            // offline-first and EPUBs are routinely sourced from untrusted origins.
+                            settings.blockNetworkLoads = true
+                            settings.allowFileAccess = false // WebViewAssetLoader replaces file:// entirely
+                            settings.allowContentAccess = false
                             webViewClient = object : WebViewClientCompat() {
                                 override fun shouldInterceptRequest(
                                     view: WebView,
@@ -85,6 +99,21 @@ fun EpubReaderScreen(
                                     view: WebView,
                                     url: String
                                 ): WebResourceResponse? = assetLoader.shouldInterceptRequest(Uri.parse(url))
+
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView,
+                                    request: WebResourceRequest
+                                ): Boolean {
+                                    // Block navigation to anything outside the app's own local
+                                    // asset-loader origin -- e.g. a tapped link inside EPUB content
+                                    // must never take over this in-reader WebView and load the live
+                                    // web with no browser chrome around it.
+                                    return !request.url.toString().startsWith(ASSET_LOADER_ORIGIN)
+                                }
+
+                                override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                                    return !url.startsWith(ASSET_LOADER_ORIGIN)
+                                }
 
                                 override fun onPageFinished(view: WebView, url: String?) {
                                     super.onPageFinished(view, url)
@@ -112,6 +141,16 @@ fun EpubReaderScreen(
                     },
                     update = { webView ->
                         webView.evaluateJavascript(buildThemeJs(state.filterMode), null)
+                    },
+                    onRelease = { webView ->
+                        // WebView is not destroyed automatically when this composable leaves
+                        // composition -- without an explicit destroy() call, repeated open/close
+                        // cycles of the reader accumulate native-heap WebView instances (a
+                        // well-known Android leak hazard).
+                        webView.stopLoading()
+                        webView.loadUrl("about:blank")
+                        webView.removeAllViews()
+                        webView.destroy()
                     }
                 )
             }
@@ -189,7 +228,12 @@ fun EpubReaderScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text("Theme", color = Color.Gray, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .padding(vertical = 8.dp)
+                            .horizontalScroll(rememberScrollState())
+                    ) {
                         ColorFilterMode.entries.forEach { mode ->
                             FilterChip(
                                 selected = state.filterMode == mode,
@@ -231,7 +275,9 @@ private fun restoreScrollWhenLaidOut(
     resumePercentage: Float,
     attempt: Int
 ) {
+    if (!view.isAttachedToWindow) return
     view.evaluateJavascript("document.documentElement.scrollHeight.toString()") { result ->
+        if (!view.isAttachedToWindow) return@evaluateJavascript
         val scrollHeightCss = result?.trim('"')?.toIntOrNull() ?: 0
         val contentHeightPx = (scrollHeightCss * density).toInt()
         val maxScroll = contentHeightPx - view.height
@@ -257,7 +303,7 @@ private fun buildThemeJs(mode: ColorFilterMode): String {
     return """
         (function() {
             var style = document.getElementById('reader-theme');
-            if (style) { style.innerHTML = 'body { background-color: $bg !important; color: $fg !important; }'; }
+            if (style) { style.innerHTML = 'body { background-color: $bg !important; } body, body *:not(a) { color: $fg !important; }'; }
         })();
     """.trimIndent()
 }
