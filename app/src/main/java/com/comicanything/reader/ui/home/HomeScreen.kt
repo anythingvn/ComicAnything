@@ -288,7 +288,7 @@ fun LibraryContent(
         return
     }
 
-    val inProgress = comics.filter { it.currentPage > 1 || it.progressPercentage > 0f }
+    val inProgress = comics.filter { it.currentPage > 1 || (it.format == ComicFormat.EPUB && it.progressPercentage > 0f) }
 
     Column(
         modifier = Modifier

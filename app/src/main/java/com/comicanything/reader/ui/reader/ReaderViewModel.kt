@@ -217,19 +217,28 @@ class ReaderViewModel @JvmOverloads constructor(
             val source = try {
                 withContext(ioDispatcher) { createPageSource(comic) }
             } catch (e: UnsupportedFormatException) {
-                _uiState.value = _uiState.value.copy(pageLoadError = "This format isn't supported yet")
+                // A newer open may have superseded this one while the page source was being
+                // created -- only surface this error if this open is still the active one, so a
+                // stale failure can't stomp a newer comic's already-applied state.
+                if (_uiState.value.activeComic?.id == comic.id) {
+                    _uiState.value = _uiState.value.copy(pageLoadError = "This format isn't supported yet")
+                }
                 return@launch
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Failed to open comic")
+                if (_uiState.value.activeComic?.id == comic.id) {
+                    _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Failed to open comic")
+                }
                 return@launch
             }
             val cache = PageBitmapCache(source)
             val pageCount = cache.pageCount
             if (pageCount <= 0) {
                 cache.close()
-                _uiState.value = _uiState.value.copy(pageLoadError = "This comic has no readable pages")
+                if (_uiState.value.activeComic?.id == comic.id) {
+                    _uiState.value = _uiState.value.copy(pageLoadError = "This comic has no readable pages")
+                }
                 return@launch
             }
             if (_uiState.value.activeComic?.id != comic.id) {
