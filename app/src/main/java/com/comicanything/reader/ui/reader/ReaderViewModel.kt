@@ -79,7 +79,8 @@ class ReaderViewModel @JvmOverloads constructor(
     private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application),
     private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail,
     private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub,
-    private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") }
+    private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") },
+    private val cbrCacheRoot: () -> File = { File(application.cacheDir, "cbr_temp") }
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -215,7 +216,7 @@ class ReaderViewModel @JvmOverloads constructor(
         activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val source = try {
-                withContext(ioDispatcher) { createPageSource(comic) }
+                withContext(ioDispatcher) { createPageSource(comic, cbrCacheRoot) }
             } catch (e: UnsupportedFormatException) {
                 // A newer open may have superseded this one while the page source was being
                 // created -- only surface this error if this open is still the active one, so a

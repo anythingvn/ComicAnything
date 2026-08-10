@@ -18,11 +18,12 @@ class UnsupportedFormatException(format: ComicFormat) :
 class PageDecodeException(page: Int, cause: Throwable) :
     Exception("Failed to decode page $page", cause)
 
-fun createPageSource(comic: ComicItem): ComicPageSource {
+fun createPageSource(comic: ComicItem, cbrCacheRoot: () -> File): ComicPageSource {
     if (comic.source != ComicSource.LOCAL) throw UnsupportedFormatException(comic.format)
     return when (comic.format) {
         ComicFormat.PDF -> PdfPageSource(File(comic.pathOrUrl))
         ComicFormat.CBZ -> CbzPageSource(File(comic.pathOrUrl))
+        ComicFormat.CBR -> CbrPageSource(File(comic.pathOrUrl), File(cbrCacheRoot(), comic.id))
         else -> throw UnsupportedFormatException(comic.format)
     }
 }

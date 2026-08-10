@@ -169,25 +169,6 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `opening a comic with an unsupported format sets an error and does not crash`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
-        val comic = ComicItem(
-            id = "1",
-            title = "Unsupported Book",
-            pathOrUrl = "/fake/path.cbr",
-            source = ComicSource.LOCAL,
-            format = ComicFormat.CBR
-        )
-
-        viewModel.openComic(comic)
-        advanceUntilIdle()
-
-        assertEquals("This format isn't supported yet", viewModel.uiState.value.pageLoadError)
-        assertNull(viewModel.uiState.value.currentPageBitmap)
-    }
-
-    @Test
     fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
@@ -1026,5 +1007,70 @@ class ReaderViewModelTest {
         // next EPUB open or an explicit close.
         assertTrue(!extractedDir.exists())
         assertNull(viewModel.uiState.value.epubBook)
+    }
+
+    @Test
+    fun `opening a CBR comic decodes pages via the real junrar-backed pipeline`() = runTest {
+        val fixtureBytes = javaClass.classLoader!!.getResourceAsStream("sample.cbr")!!.readBytes()
+        val comicFile = File(tempFolder.newFolder("Comics"), "test.cbr")
+        comicFile.writeBytes(fixtureBytes)
+        val cbrExtractionRoot = tempFolder.newFolder("cbr-cache-${System.nanoTime()}")
+        val comic = ComicItem(
+            id = "cbr-comic",
+            title = "Test CBR",
+            pathOrUrl = comicFile.absolutePath,
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBR
+        )
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            cbrCacheRoot = { cbrExtractionRoot }
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        // sample.cbr has 3 real pages (page1.jpg, page2.jpg, page10.jpg -- ComicInfo.xml
+        // excluded). This proves the real junrar extraction + CbrPageSource + PageBitmapCache
+        // pipeline is genuinely wired together, not just that some mock returned a value.
+        // (totalPages comes from pageCount, which never touches BitmapFactory -- pageLoadError
+        // is deliberately not asserted here since BitmapFactory decode isn't testable in this
+        // project's plain-JVM unit test environment, the same accepted limitation CBZ/PDF page
+        // decode already has: no Robolectric, so android.graphics.BitmapFactory always fails.)
+        assertEquals(3, viewModel.uiState.value.totalPages)
+    }
+
+    @Test
+    fun `opening a PDF or CBZ comic never touches cbrCacheRoot`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var cbrCacheRootCallCount = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            cbrCacheRoot = { cbrCacheRootCallCount++; tempFolder.newFolder("should-not-be-used-${System.nanoTime()}") }
+        )
+        val comic = ComicItem(
+            id = "cbz-comic",
+            title = "Test CBZ",
+            pathOrUrl = "/fake/path.cbz",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        // This proves cbrCacheRoot is genuinely lazy -- opening a non-CBR comic must never
+        // evaluate it, which is what lets every existing PDF/CBZ test in this file keep
+        // constructing ReaderViewModel without supplying a fake cbrCacheRoot at all.
+        assertEquals(0, cbrCacheRootCallCount)
     }
 }
