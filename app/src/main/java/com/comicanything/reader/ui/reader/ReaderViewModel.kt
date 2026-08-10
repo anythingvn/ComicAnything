@@ -88,6 +88,19 @@ class ReaderViewModel @JvmOverloads constructor(
     private var pageCache: PageBitmapCache? = null
     private var debounceJob: Job? = null
     private var epubExtractedDir: File? = null
+
+    /**
+     * Tracks the coroutine currently performing an `openComic`/`openEpubComic` open, so that
+     * starting a new open can cancel any still-in-flight previous one. Without this, opening
+     * comic A (slow extraction/decode), backing out, then quickly opening comic B could let A's
+     * coroutine finish later and unconditionally overwrite B's already-applied state -- and for
+     * EPUB specifically, two overlapping opens of the *same* comic id could race
+     * `extractionDir.deleteRecursively()` against a still-in-progress extraction into that same
+     * path. Cancellation alone isn't guaranteed to land before every suspension point, so result
+     * application is additionally guarded by an `activeComic?.id` check (see [openComic] and
+     * [openEpubComic]) as belt-and-suspenders.
+     */
+    private var activeOpenJob: Job? = null
     private val thumbnailCache = object : LinkedHashMap<String, Bitmap?>(THUMBNAIL_CACHE_SIZE, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap?>) =
             size > THUMBNAIL_CACHE_SIZE
@@ -183,6 +196,7 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun openComic(comic: ComicItem) {
+        activeOpenJob?.cancel()
         if (comic.format == ComicFormat.EPUB) {
             openEpubComic(comic)
             return
@@ -198,7 +212,7 @@ class ReaderViewModel @JvmOverloads constructor(
             epubBook = null,
             pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
         )
-        viewModelScope.launch {
+        activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val source = try {
                 withContext(ioDispatcher) { createPageSource(comic) }
@@ -216,6 +230,12 @@ class ReaderViewModel @JvmOverloads constructor(
             if (pageCount <= 0) {
                 cache.close()
                 _uiState.value = _uiState.value.copy(pageLoadError = "This comic has no readable pages")
+                return@launch
+            }
+            if (_uiState.value.activeComic?.id != comic.id) {
+                // A newer open superseded this one while the page source was being created --
+                // discard this result instead of assigning a cache nothing will reference.
+                cache.close()
                 return@launch
             }
             pageCache = cache
@@ -257,13 +277,14 @@ class ReaderViewModel @JvmOverloads constructor(
      * the cleanup always completes even if this coroutine is cancelled by a subsequent open.
      */
     private suspend fun closePreviousComicResources(previousCache: PageBitmapCache?, previousExtractedDir: File?) {
-        withContext(NonCancellable) {
+        withContext(ioDispatcher + NonCancellable) {
             previousCache?.close()
             previousExtractedDir?.let { runCatching { it.deleteRecursively() } }
         }
     }
 
     private fun openEpubComic(comic: ComicItem) {
+        activeOpenJob?.cancel()
         val (previousCache, previousExtractedDir) = capturePreviousComicResources()
         _uiState.value = _uiState.value.copy(
             activeComic = comic,
@@ -273,10 +294,16 @@ class ReaderViewModel @JvmOverloads constructor(
             currentPageBitmap = null,
             pageSourceGeneration = _uiState.value.pageSourceGeneration + 1
         )
-        viewModelScope.launch {
+        activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val extractionDir = File(epubCacheRoot(), comic.id)
             val book = withContext(ioDispatcher) { epubExtractor(File(comic.pathOrUrl), extractionDir) }
+            if (_uiState.value.activeComic?.id != comic.id) {
+                // A newer open superseded this one while extraction was in flight -- discard
+                // this result and clean up its directory rather than applying stale state.
+                book?.let { runCatching { it.extractedDir.deleteRecursively() } }
+                return@launch
+            }
             if (book == null) {
                 _uiState.value = _uiState.value.copy(pageLoadError = "Couldn't open this EPUB file")
                 return@launch
@@ -316,6 +343,7 @@ class ReaderViewModel @JvmOverloads constructor(
      * onCleared() is invoked (ViewModel.clear() cancels the scope before calling onCleared()).
      */
     private fun flushAndTeardown() {
+        activeOpenJob?.cancel()
         val cacheToClose = pageCache
         val extractedDirToClean = epubExtractedDir
         val comicToFlush = _uiState.value.activeComic
@@ -327,12 +355,12 @@ class ReaderViewModel @JvmOverloads constructor(
             debounceJob?.cancel()
         }
         if (cacheToClose != null) {
-            viewModelScope.launch(NonCancellable) {
+            viewModelScope.launch(ioDispatcher + NonCancellable) {
                 cacheToClose.close()
             }
         }
         if (extractedDirToClean != null) {
-            viewModelScope.launch(NonCancellable) {
+            viewModelScope.launch(ioDispatcher + NonCancellable) {
                 runCatching { extractedDirToClean.deleteRecursively() }
             }
         }
