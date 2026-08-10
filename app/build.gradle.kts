@@ -83,6 +83,7 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("com.google.android.gms:play-services-auth:21.6.0")
+    implementation("com.github.junrar:junrar:8.1.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
