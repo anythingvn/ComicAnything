@@ -7,6 +7,7 @@ import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import java.io.File
 import java.io.StringReader
+import java.net.URLDecoder
 import java.util.zip.ZipFile
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -55,7 +56,7 @@ suspend fun extractEpub(epubFile: File, extractionDir: File): EpubBook? = withCo
         // content is fully correct. WebView/Chromium renders XHTML-flavored markup fine under
         // an HTML content-type, so renaming the file is sufficient; no markup change needed.
         val combinedFile = File(opfDir, "__combined.html")
-        writeCombinedDocument(chapterFiles, combinedFile)
+        writeCombinedDocument(chapterFiles, opfDir, combinedFile)
 
         EpubBook(extractedDir = extractionDir, combinedHtmlFile = combinedFile)
     } catch (e: Exception) {
@@ -135,19 +136,60 @@ private fun parseOpfForSpineFiles(opfFile: File, opfDir: File): List<File> {
         manifest[idRef]?.let { spineHrefs.add(it) }
     }
 
-    return spineHrefs.map { File(opfDir, it) }.filter { it.exists() }
+    return spineHrefs
+        .map { URLDecoder.decode(it, "UTF-8") }
+        .map { File(opfDir, it) }
+        .filter { it.exists() }
 }
 
-private fun writeCombinedDocument(chapterFiles: List<File>, outputFile: File) {
+/**
+ * Combines all spine chapter files into a single HTML document that lives in [opfDir]
+ * (alongside `content.opf`) so that top-level relative references from files that
+ * already sat directly in [opfDir] keep working unchanged.
+ *
+ * Real-world EPUBs produced by Calibre/Sigil/publisher toolchains commonly nest spine
+ * files under a subdirectory (e.g. `OEBPS/Text/chapter1.xhtml`) with shared resources
+ * elsewhere (e.g. `OEBPS/Styles/style.css`, `OEBPS/Images/fig.png`), referenced from the
+ * chapter via paths like `../Styles/style.css`. Once such a chapter's markup is copied
+ * verbatim into the combined document living in [opfDir], that relative reference would
+ * resolve against the wrong base directory and silently fail to load. To avoid that, every
+ * relative `href=`/`src=` attribute value and CSS `url(...)` reference in each chapter's
+ * raw text is rewritten here -- resolved relative to that chapter's own directory, then
+ * re-expressed relative to [opfDir] -- before any `<link>`/`<style>`/body content is
+ * extracted from it. Absolute URLs (`http(s)://`, `data:`, `mailto:`), fragment-only
+ * references (`#anchor`), and root-relative paths (`/...`) are left untouched.
+ */
+private fun writeCombinedDocument(chapterFiles: List<File>, opfDir: File, outputFile: File) {
     val headExtras = StringBuilder()
     val bodyContent = StringBuilder()
     val linkPattern = Regex("<link[^>]*rel=[\"']stylesheet[\"'][^>]*/?>", RegexOption.IGNORE_CASE)
+    val stylePattern = Regex("<style[^>]*>(.*?)</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
     val bodyPattern = Regex("<body[^>]*>(.*)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    val hrefSrcPattern = Regex("""(href|src)(\s*=\s*)(["'])([^"']*)\3""", RegexOption.IGNORE_CASE)
+    val cssUrlPattern = Regex("""url\((['"]?)([^'")]+)\1\)""", RegexOption.IGNORE_CASE)
 
     chapterFiles.forEachIndexed { index, chapterFile ->
-        val text = chapterFile.readText()
+        val rawText = chapterFile.readText()
+        val chapterRelDir = chapterFile.parentFile
+            ?.relativeTo(opfDir)
+            ?.path
+            ?.replace(File.separatorChar, '/')
+            .orEmpty()
+
+        val rewrittenHrefs = hrefSrcPattern.replace(rawText) { match ->
+            val (attr, eq, quote, value) = match.destructured
+            "$attr$eq$quote${resolveRelativeToOpf(chapterRelDir, value)}$quote"
+        }
+        val text = cssUrlPattern.replace(rewrittenHrefs) { match ->
+            val quote = match.groupValues[1]
+            val value = match.groupValues[2]
+            "url($quote${resolveRelativeToOpf(chapterRelDir, value)}$quote)"
+        }
 
         linkPattern.findAll(text).forEach { match ->
+            if (!headExtras.contains(match.value)) headExtras.append(match.value).append("\n")
+        }
+        stylePattern.findAll(text).forEach { match ->
             if (!headExtras.contains(match.value)) headExtras.append(match.value).append("\n")
         }
 
@@ -171,4 +213,27 @@ private fun writeCombinedDocument(chapterFiles: List<File>, outputFile: File) {
     """.trimIndent()
 
     outputFile.writeText(combinedHtml)
+}
+
+/**
+ * Resolves [href] -- taken from a chapter file located at [chapterRelDir] relative to
+ * [opfDir] -- into a path expressed relative to [opfDir] instead. Absolute URLs, fragment
+ * references, and root-relative paths pass through unchanged.
+ */
+private fun resolveRelativeToOpf(chapterRelDir: String, href: String): String {
+    if (href.isBlank() || href.startsWith("http://") || href.startsWith("https://") ||
+        href.startsWith("data:") || href.startsWith("#") || href.startsWith("/") || href.startsWith("mailto:")
+    ) {
+        return href
+    }
+    val combined = if (chapterRelDir.isEmpty()) href else "$chapterRelDir/$href"
+    val stack = mutableListOf<String>()
+    for (part in combined.split("/")) {
+        when (part) {
+            "", "." -> {}
+            ".." -> if (stack.isNotEmpty()) stack.removeAt(stack.size - 1)
+            else -> stack.add(part)
+        }
+    }
+    return stack.joinToString("/")
 }

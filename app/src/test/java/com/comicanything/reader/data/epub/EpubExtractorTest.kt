@@ -152,6 +152,91 @@ class EpubExtractorTest {
     }
 
     @Test
+    fun `rewrites relative hrefs and srcs for a nested spine layout so they resolve from opfDir`() = runTest {
+        // Mirrors the layout produced by Calibre/Sigil/most publisher toolchains: spine
+        // files live under OEBPS/Text/, shared resources live under sibling OEBPS/Styles/
+        // and OEBPS/Images/ directories, referenced via "../Styles/..." style paths. The
+        // combined document lives directly in OEBPS/ (opfDir), so those references must be
+        // rewritten to be relative to OEBPS/ instead of OEBPS/Text/.
+        val nestedOpfXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+                <manifest>
+                    <item id="chap1" href="Text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+                </manifest>
+                <spine>
+                    <itemref idref="chap1"/>
+                </spine>
+            </package>
+        """.trimIndent()
+        val chapter1 = """
+            <html>
+            <head>
+                <link rel="stylesheet" href="../Styles/style.css"/>
+                <style>div { background: url('../Images/bg.png'); }</style>
+            </head>
+            <body>
+                <p>Nested chapter</p>
+                <img src="../Images/fig.png"/>
+            </body>
+            </html>
+        """.trimIndent()
+        val epub = buildEpub(
+            mapOf(
+                "META-INF/container.xml" to containerXml,
+                "OEBPS/content.opf" to nestedOpfXml,
+                "OEBPS/Text/chapter1.xhtml" to chapter1,
+                "OEBPS/Styles/style.css" to "body { color: red; }",
+                "OEBPS/Images/fig.png" to "not-a-real-png-but-presence-is-what-matters",
+                "OEBPS/Images/bg.png" to "not-a-real-png-either"
+            )
+        )
+        val extractionDir = tempFolder.newFolder("extract-${System.nanoTime()}")
+
+        val book = extractEpub(epub, extractionDir)
+
+        assertTrue(book != null)
+        val combined = book!!.combinedHtmlFile.readText()
+        assertTrue(
+            "expected rewritten stylesheet href relative to opfDir, got: $combined",
+            combined.contains("""href="Styles/style.css"""")
+        )
+        assertTrue(
+            "expected rewritten img src relative to opfDir, got: $combined",
+            combined.contains("""src="Images/fig.png"""")
+        )
+        assertTrue(
+            "expected rewritten inline CSS url() relative to opfDir, got: $combined",
+            combined.contains("url('Images/bg.png')") || combined.contains("url(Images/bg.png)")
+        )
+        // The rewritten (not original, chapter-relative) values are what must appear.
+        assertTrue(!combined.contains("""href="../Styles/style.css""""))
+        assertTrue(!combined.contains("""src="../Images/fig.png""""))
+    }
+
+    @Test
+    fun `flat layout hrefs are left unchanged since chapter dir already equals opfDir`() = runTest {
+        val epub = buildEpub(
+            mapOf(
+                "META-INF/container.xml" to containerXml,
+                "OEBPS/content.opf" to opfXml,
+                "OEBPS/chapter1.xhtml" to """<html><head><link rel="stylesheet" href="style.css"/></head><body><p>One</p><img src="fig.png"/></body></html>""",
+                "OEBPS/chapter2.xhtml" to "<html><body><p>Two</p></body></html>",
+                "OEBPS/style.css" to "body { color: blue; }",
+                "OEBPS/fig.png" to "not-a-real-png"
+            )
+        )
+        val extractionDir = tempFolder.newFolder("extract-${System.nanoTime()}")
+
+        val book = extractEpub(epub, extractionDir)
+
+        assertTrue(book != null)
+        val combined = book!!.combinedHtmlFile.readText()
+        assertTrue(combined.contains("""href="style.css""""))
+        assertTrue(combined.contains("""src="fig.png""""))
+    }
+
+    @Test
     fun `re-extracting the same directory clears any prior extraction first`() = runTest {
         val epub = buildEpub(
             mapOf(
