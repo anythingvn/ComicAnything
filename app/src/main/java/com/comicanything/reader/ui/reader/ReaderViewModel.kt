@@ -9,18 +9,23 @@ import com.comicanything.reader.data.epub.extractEpub
 import com.comicanything.reader.data.model.ColorFilterMode
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
+import com.comicanything.reader.data.model.ComicSource
 import com.comicanything.reader.data.model.ReadingMode
 import com.comicanything.reader.data.pagesource.PageBitmapCache
 import com.comicanything.reader.data.pagesource.PageDecodeException
 import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.pagesource.decodeThumbnail
+import com.comicanything.reader.data.repository.DriveApiException
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
+import com.comicanything.reader.data.repository.DriveEntry
+import com.comicanything.reader.data.repository.DriveFileCache
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
+import com.comicanything.reader.data.repository.resolveComicFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -36,9 +41,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
+data class DriveBreadcrumb(val folderId: String, val name: String)
+
 data class ReaderUiState(
     val libraryComics: List<ComicItem> = emptyList(),
-    val driveComics: List<ComicItem> = emptyList(),
+    val driveEntries: List<DriveEntry> = emptyList(),
+    val driveBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
+    val driveError: String? = null,
     val activeComic: ComicItem? = null,
     val currentPage: Int = 1,
     val totalPages: Int = 48,
@@ -80,7 +89,32 @@ class ReaderViewModel @JvmOverloads constructor(
     private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail,
     private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub,
     private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") },
-    private val cbrCacheRoot: () -> File = { File(application.cacheDir, "cbr_temp") }
+    private val cbrCacheRoot: () -> File = { File(application.cacheDir, "cbr_temp") },
+    // A plain (non-lambda) `DriveFileCache = DriveFileCache(File(application.filesDir, ...))`
+    // default would construct eagerly at every ReaderViewModel construction (Kotlin evaluates
+    // constructor parameter defaults unconditionally when the caller omits the argument),
+    // immediately touching Context.getFilesDir() -- an Android stub-jar method that throws "not
+    // mocked" in plain JVM unit tests, exactly like the progressRepo/connectionRepo hazard
+    // documented in ReaderViewModelTest. Wrapping it as a `() -> DriveFileCache` supplier, matching
+    // the existing epubCacheRoot/cbrCacheRoot pattern, defers that construction to actual use.
+    private val driveFileCache: () -> DriveFileCache = { DriveFileCache(File(application.filesDir, "drive_cache")) },
+    private val driveAccessToken: () -> String? = { null },
+    // The LOCAL short-circuit is duplicated here (matching resolveComicFile's own LOCAL check)
+    // so that a LOCAL comic open never invokes `cacheProvider()` at all -- preserving the same
+    // "never touches a lazy resource it doesn't need" guarantee cbrCacheRoot already has for
+    // non-CBR formats. Calling resolveComicFile(comic, cacheProvider(), ...) unconditionally would
+    // defeat driveFileCache's laziness, since Kotlin evaluates function arguments (including
+    // cacheProvider()) before the callee runs, regardless of what branch resolveComicFile takes
+    // internally.
+    private val comicFileResolver: suspend (ComicItem, () -> DriveFileCache, () -> String?) -> File =
+        { comic, cacheProvider, token ->
+            if (comic.source == ComicSource.LOCAL) {
+                File(comic.pathOrUrl)
+            } else {
+                resolveComicFile(comic, cacheProvider(), driveRepo::downloadFile, token)
+            }
+        },
+    private val fetchDriveFolderContents: suspend (String, String) -> List<DriveEntry> = driveRepo::fetchFolderContents
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -144,11 +178,51 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    fun fetchDriveFolder(folderUrlOrId: String, apiKey: String? = null) {
-        // Temporary stub for Task 1 (GoogleDriveRepository's new Bearer-auth signature) --
-        // Task 3 of the Drive file access plan replaces this function entirely with
-        // navigateDriveFolder/navigateDriveUp/retryDriveFolder/navigateToLinkedFolder.
-        _uiState.value = _uiState.value.copy(isLoadingDrive = false)
+    fun navigateToLinkedFolder(folderUrlOrId: String) {
+        val folderId = driveRepo.extractFolderId(folderUrlOrId)
+        navigateDriveFolder(folderId, name = folderId)
+    }
+
+    fun navigateDriveFolder(folderId: String, name: String) {
+        _uiState.value = _uiState.value.copy(
+            driveBreadcrumbs = _uiState.value.driveBreadcrumbs + DriveBreadcrumb(folderId, name)
+        )
+        fetchCurrentDriveFolder()
+    }
+
+    fun navigateDriveUp(toIndex: Int) {
+        val breadcrumbs = _uiState.value.driveBreadcrumbs
+        if (toIndex !in breadcrumbs.indices) return
+        _uiState.value = _uiState.value.copy(driveBreadcrumbs = breadcrumbs.take(toIndex + 1))
+        fetchCurrentDriveFolder()
+    }
+
+    fun retryDriveFolder() {
+        fetchCurrentDriveFolder()
+    }
+
+    private fun fetchCurrentDriveFolder() {
+        val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoadingDrive = true, driveError = null)
+            val token = driveAccessToken()
+            if (token == null) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingDrive = false,
+                    driveError = "Connect your Google Drive to browse it"
+                )
+                return@launch
+            }
+            try {
+                val entries = fetchDriveFolderContents(current.folderId, token)
+                _uiState.value = _uiState.value.copy(driveEntries = entries, isLoadingDrive = false)
+            } catch (e: DriveApiException) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingDrive = false,
+                    driveError = e.message ?: "Couldn't load this folder"
+                )
+            }
+        }
     }
 
     fun loadDriveConnectionState() {
@@ -189,7 +263,13 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun disconnectDrive() {
-        _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
+        _uiState.value = _uiState.value.copy(
+            isDriveConnected = false,
+            driveAccountEmail = null,
+            driveEntries = emptyList(),
+            driveBreadcrumbs = emptyList(),
+            driveError = null
+        )
         viewModelScope.launch {
             connectionRepo.save(DriveConnectionHint(isConnected = false, accountEmail = null))
         }
@@ -215,7 +295,10 @@ class ReaderViewModel @JvmOverloads constructor(
         activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val source = try {
-                withContext(ioDispatcher) { createPageSource(comic, cbrCacheRoot) }
+                withContext(ioDispatcher) {
+                    val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                    createPageSource(comic, cbrCacheRoot, file)
+                }
             } catch (e: UnsupportedFormatException) {
                 // A newer open may have superseded this one while the page source was being
                 // created -- only surface this error if this open is still the active one, so a
@@ -306,7 +389,19 @@ class ReaderViewModel @JvmOverloads constructor(
         activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val extractionDir = File(epubCacheRoot(), comic.id)
-            val book = withContext(ioDispatcher) { epubExtractor(File(comic.pathOrUrl), extractionDir) }
+            val book = try {
+                withContext(ioDispatcher) {
+                    val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                    epubExtractor(file, extractionDir)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (_uiState.value.activeComic?.id == comic.id) {
+                    _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Couldn't open this EPUB file")
+                }
+                return@launch
+            }
             if (_uiState.value.activeComic?.id != comic.id) {
                 // A newer open superseded this one while extraction was in flight -- discard
                 // this result and clean up its directory rather than applying stale state.

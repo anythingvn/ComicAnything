@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.ViewModelProvider
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.ui.home.HomeScreen
 import com.comicanything.reader.ui.home.rememberHomeScreenState
@@ -33,7 +34,14 @@ private const val DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: ReaderViewModel by viewModels()
+    private val viewModel: ReaderViewModel by viewModels {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                return ReaderViewModel(application, driveAccessToken = { lastAccessToken }) as T
+            }
+        }
+    }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
