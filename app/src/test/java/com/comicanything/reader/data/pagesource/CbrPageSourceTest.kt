@@ -1,5 +1,6 @@
 package com.comicanything.reader.data.pagesource
 
+import com.github.junrar.Archive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -56,5 +57,34 @@ class CbrPageSourceTest {
 
         assertTrue(!File(extractionDir, "stale-leftover-file.txt").exists())
         source.close()
+    }
+
+    @Test
+    fun `pages in multiple subdirectories sort by full relative path, not basename`() {
+        // multi_subdir.cbr contains Ch01/page1.jpg, Ch01/page2.jpg, Ch02/page1.jpg,
+        // Ch02/page2.jpg. Sorting by bare filename alone (ignoring directory) would
+        // interleave chapters as Ch01/page1, Ch02/page1, Ch01/page2, Ch02/page2 --
+        // this test asserts the real, observable per-chapter order is preserved instead.
+        val extractionDir = tempFolder.newFolder("multi-subdir-${System.nanoTime()}")
+
+        Archive(fixture("multi_subdir.cbr")).use { archive ->
+            var header = archive.nextFileHeader()
+            while (header != null) {
+                if (!header.isDirectory) {
+                    val outFile = File(extractionDir, header.fileName)
+                    outFile.parentFile?.mkdirs()
+                    outFile.outputStream().use { out -> archive.extractFile(header, out) }
+                }
+                header = archive.nextFileHeader()
+            }
+        }
+
+        val ordered = listImagePageFilesSorted(extractionDir)
+            .map { it.toRelativeString(extractionDir).replace(File.separatorChar, '/') }
+
+        assertEquals(
+            listOf("Ch01/page1.jpg", "Ch01/page2.jpg", "Ch02/page1.jpg", "Ch02/page2.jpg"),
+            ordered,
+        )
     }
 }

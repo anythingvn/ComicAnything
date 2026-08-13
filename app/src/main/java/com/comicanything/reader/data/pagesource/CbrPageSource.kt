@@ -18,7 +18,7 @@ internal fun listImagePageFilesSorted(dir: File): List<File> {
                 !file.name.startsWith(".") &&
                 file.extension.lowercase() in CBR_IMAGE_EXTENSIONS
         }
-        .sortedWith(compareBy(naturalOrderComparator()) { it.name })
+        .sortedWith(compareBy(naturalOrderComparator()) { it.toRelativeString(dir).replace(File.separatorChar, '/') })
         .toList()
 }
 
@@ -31,22 +31,27 @@ class CbrPageSource(file: File, extractionDir: File) : ComicPageSource {
         extractionDir.mkdirs()
         val canonicalExtractionDir = extractionDir.canonicalPath
 
-        Archive(file).use { archive ->
-            var header = archive.nextFileHeader()
-            while (header != null) {
-                if (!header.isDirectory) {
-                    val outFile = File(extractionDir, header.fileName)
-                    val canonicalOutFile = outFile.canonicalPath
-                    if (canonicalOutFile.startsWith(canonicalExtractionDir + File.separator)) {
-                        outFile.parentFile?.mkdirs()
-                        outFile.outputStream().use { out -> archive.extractFile(header, out) }
+        try {
+            Archive(file).use { archive ->
+                var header = archive.nextFileHeader()
+                while (header != null) {
+                    if (!header.isDirectory) {
+                        val outFile = File(extractionDir, header.fileName)
+                        val canonicalOutFile = outFile.canonicalPath
+                        if (canonicalOutFile.startsWith(canonicalExtractionDir + File.separator)) {
+                            outFile.parentFile?.mkdirs()
+                            outFile.outputStream().use { out -> archive.extractFile(header, out) }
+                        }
+                        // else: entry's resolved path escapes the extraction directory (Zip Slip
+                        // / path traversal) -- skip this one entry rather than aborting the whole
+                        // extraction, matching EpubExtractor.kt's already-reviewed guard.
                     }
-                    // else: entry's resolved path escapes the extraction directory (Zip Slip
-                    // / path traversal) -- skip this one entry rather than aborting the whole
-                    // extraction, matching EpubExtractor.kt's already-reviewed guard.
+                    header = archive.nextFileHeader()
                 }
-                header = archive.nextFileHeader()
             }
+        } catch (e: Throwable) {
+            extractionDir.deleteRecursively()
+            throw e
         }
 
         pageFiles = listImagePageFilesSorted(extractionDir)
