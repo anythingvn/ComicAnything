@@ -55,22 +55,24 @@ Manages a persistent cache directory under `Application.filesDir` (deliberately 
 suspend fun resolveComicFile(
     comic: ComicItem,
     driveCache: DriveFileCache,
-    driveRepo: GoogleDriveRepository,
+    downloadDriveFile: suspend (fileId: String, destination: File, accessToken: String) -> Unit,
     accessToken: () -> String?
 ): File
 ```
 
 - `comic.source == ComicSource.LOCAL`: returns `File(comic.pathOrUrl)` immediately — no I/O, byte-for-byte today's behavior.
-- `comic.source == ComicSource.GOOGLE_DRIVE`: checks `driveCache.cachedFile(comic.id)` first; on a hit, returns it with no network call at all (this is what makes a previously-opened Drive comic reopen instantly and work offline). On a miss, calls `accessToken()` — if `null`, throws `DriveDownloadException("Not connected to Google Drive")` immediately, no network attempt — otherwise calls `driveCache.download(comic.id) { dest -> driveRepo.downloadFile(comic.id, dest, token) }` and returns the result.
+- `comic.source == ComicSource.GOOGLE_DRIVE`: checks `driveCache.cachedFile(comic.id)` first; on a hit, returns it with no network call at all (this is what makes a previously-opened Drive comic reopen instantly and work offline). On a miss, calls `accessToken()` — if `null`, throws `DriveDownloadException("Not connected to Google Drive")` immediately, no network attempt — otherwise calls `driveCache.download(comic.id) { dest -> downloadDriveFile(comic.id, dest, token) }` and returns the result.
+- `downloadDriveFile` takes a lambda rather than a concrete `GoogleDriveRepository`, deliberately mirroring `DriveFileCache.download`'s own shape and the existing `epubExtractor`/`thumbnailDecoder` injected-function-reference pattern on `ReaderViewModel` — the real default is `driveRepo::downloadFile`, and tests can substitute a fake without needing `GoogleDriveRepository` (a concrete class, not an interface) to be subclassed or mocked.
 
 ### `ReaderViewModel` / `ComicPageSource.kt` integration
 
 - `createPageSource(comic: ComicItem, cbrCacheRoot: () -> File, file: File): ComicPageSource` — signature changes to take the already-resolved `File` as a parameter instead of deriving it from `comic.pathOrUrl` internally. The `if (comic.source != ComicSource.LOCAL) throw UnsupportedFormatException(...)` guard is removed entirely — resolution has already validated the file exists (of either source) before this function is ever called, so `createPageSource` goes back to being purely a format dispatcher, with no notion of source at all. Its `when (comic.format)` branches use `file` directly (`PdfPageSource(file)`, `CbzPageSource(file)`, `CbrPageSource(file, File(cbrCacheRoot(), comic.id))`) instead of reconstructing `File(comic.pathOrUrl)`.
 - `openComic`: resolves via `resolveComicFile` first (inside the existing `withContext(ioDispatcher) { ... }` block, wrapped in the same try/catch that already handles `UnsupportedFormatException`/`CancellationException`/generic `Exception` — `DriveDownloadException` joins that same catch-and-surface-to-`pageLoadError` path with no new UI pattern), then passes the resolved file into `createPageSource`.
 - `openEpubComic`: same shape — resolves first, then calls `epubExtractor(resolvedFile, extractionDir)` instead of `epubExtractor(File(comic.pathOrUrl), extractionDir)`.
-- New constructor properties on `ReaderViewModel`, following the exact lazy-supplier pattern `epubCacheRoot`/`cbrCacheRoot` already establish:
+- New constructor properties on `ReaderViewModel`, following the exact lazy-supplier / injected-function-reference pattern `epubCacheRoot`/`cbrCacheRoot`/`epubExtractor` already establish:
   - `driveFileCache: DriveFileCache = DriveFileCache(File(application.filesDir, "drive_cache"))`
   - `driveAccessToken: () -> String? = { null }` — deliberately defaults to `null` rather than reading anything from `Application`, since the real token is Activity-scoped (see below). Every existing PDF/CBZ/EPUB/CBR test that never opens a `GOOGLE_DRIVE` comic is unaffected by this default, exactly like `cbrCacheRoot`'s laziness protected non-CBR tests in Epic 6.
+  - `resolveComicFile: suspend (ComicItem, DriveFileCache, () -> String?) -> File = ::resolveComicFile` (the top-level function, bound with `driveRepo::downloadFile` as its `downloadDriveFile` argument) — injected the same way `epubExtractor` is, so a test can substitute a fake resolver without needing a real network call or a real `GoogleDriveRepository` fake.
 - `fetchDriveFolder(folderUrlOrId: String, apiKey: String? = null)` is replaced by two methods:
   - `navigateDriveFolder(folderId: String, name: String)` — calls `driveRepo.fetchFolderContents(folderId, driveAccessToken())`, updates `driveEntries` and pushes `(folderId, name)` onto the breadcrumb stack.
   - `navigateDriveUp(toIndex: Int)` — truncates the breadcrumb stack back to `toIndex` and re-fetches that level's contents.
