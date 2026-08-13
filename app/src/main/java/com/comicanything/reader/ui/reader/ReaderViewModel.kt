@@ -145,11 +145,10 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun fetchDriveFolder(folderUrlOrId: String, apiKey: String? = null) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingDrive = true)
-            val items = driveRepo.fetchFolderContents(folderUrlOrId, apiKey)
-            _uiState.value = _uiState.value.copy(driveComics = items, isLoadingDrive = false)
-        }
+        // Temporary stub for Task 1 (GoogleDriveRepository's new Bearer-auth signature) --
+        // Task 3 of the Drive file access plan replaces this function entirely with
+        // navigateDriveFolder/navigateDriveUp/retryDriveFolder/navigateToLinkedFolder.
+        _uiState.value = _uiState.value.copy(isLoadingDrive = false)
     }
 
     fun loadDriveConnectionState() {
