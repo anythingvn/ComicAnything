@@ -27,15 +27,15 @@ class DriveFileCache(
             partFile.delete()
             throw e
         }
-        evictIfNeeded()
+        evictIfNeeded(excluding = finalFile)
         return finalFile
     }
 
-    private fun evictIfNeeded() {
+    private fun evictIfNeeded(excluding: File) {
         val files = cacheDir.listFiles { f -> !f.name.endsWith(".part") } ?: return
         var totalSize = files.sumOf { it.length() }
         if (totalSize <= maxTotalBytes) return
-        val oldestFirst = files.sortedBy { it.lastModified() }
+        val oldestFirst = files.filter { it != excluding }.sortedBy { it.lastModified() }
         for (file in oldestFirst) {
             if (totalSize <= maxTotalBytes) break
             totalSize -= file.length()

@@ -63,4 +63,15 @@ class DriveFileCacheTest {
         assertNull(cache.cachedFile("old"))
         assertEquals("bbbbbb", cache.cachedFile("new")?.readText())
     }
+
+    @Test
+    fun `a single download larger than the cap survives eviction instead of deleting itself`() = runTest {
+        val cacheDir = tempFolder.newFolder("cache")
+        val cache = DriveFileCache(cacheDir, maxTotalBytes = 10)
+
+        val result = cache.download("big") { dest -> dest.writeText("this text is way more than ten bytes") }
+
+        assertTrue(result.exists())
+        assertEquals("this text is way more than ten bytes", cache.cachedFile("big")?.readText())
+    }
 }
