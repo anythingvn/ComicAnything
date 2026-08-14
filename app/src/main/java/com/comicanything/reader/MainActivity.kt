@@ -38,7 +38,13 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                return ReaderViewModel(application, driveAccessToken = { lastAccessToken }) as T
+                // No longer passes a `driveAccessToken = { lastAccessToken }` closure over
+                // this@MainActivity -- that kept a possibly-destroyed Activity instance reachable
+                // from the retained ViewModel, and if the Activity WAS recreated, the closure kept
+                // reading the OLD (dead) instance's field forever, going permanently stale. Fresh
+                // tokens are now PUSHED into the ViewModel via updateDriveAccessToken() at each of
+                // the three places below that obtain one.
+                return ReaderViewModel(application) as T
             }
         }
     }
@@ -56,6 +62,7 @@ class MainActivity : ComponentActivity() {
             val result = Identity.getAuthorizationClient(this)
                 .getAuthorizationResultFromIntent(activityResult.data)
             lastAccessToken = result.accessToken
+            viewModel.updateDriveAccessToken(result.accessToken)
             // accountEmail = null: see the comment in checkDriveAuthorizationSilently() above --
             // resolving the real email is an open question deferred to a future task.
             viewModel.onDriveAuthorized(accountEmail = null)
@@ -138,6 +145,7 @@ class MainActivity : ComponentActivity() {
                     // to clear -- this call, not connectDrive(), is what actually runs on every
                     // app resume, so it's the reliable place to keep lastAccessToken current.
                     lastAccessToken = result.accessToken
+                    viewModel.updateDriveAccessToken(result.accessToken)
                     viewModel.onDriveSilentCheckSucceeded()
                 } else {
                     // Grant needs interactive re-confirmation (revoked, expired scope, etc).
@@ -186,6 +194,7 @@ class MainActivity : ComponentActivity() {
                     )
                 } else {
                     lastAccessToken = result.accessToken
+                    viewModel.updateDriveAccessToken(result.accessToken)
                     // accountEmail = null: see the comment in checkDriveAuthorizationSilently().
                     viewModel.onDriveAuthorized(accountEmail = null)
                 }
@@ -216,6 +225,7 @@ class MainActivity : ComponentActivity() {
         // accurate description of what v1 does, not a bug to silently paper over.
         val token = lastAccessToken
         lastAccessToken = null
+        viewModel.updateDriveAccessToken(null)
         if (token != null) {
             Identity.getAuthorizationClient(this)
                 .clearToken(ClearTokenRequest.builder().setToken(token).build())

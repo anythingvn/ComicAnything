@@ -308,6 +308,67 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `navigateDriveFolder surfaces a generic exception as driveError instead of crashing`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> throw IllegalStateException("boom") }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        // Proves fetchCurrentDriveFolder's catch was widened from `catch (e: DriveApiException)`
+        // to also catch plain Exception. GoogleDriveRepository can throw more than
+        // DriveApiException from deep inside response.use { } (a raw IOException from a dropped
+        // connection mid-read, or a JSONException from a non-JSON response body) -- this fake uses
+        // a plain IllegalStateException to prove the VM-level widening independently of the
+        // repository layer's own widening: without it, this exception would propagate out of
+        // viewModelScope.launch uncaught and crash the app instead of landing in driveError.
+        assertEquals("boom", viewModel.uiState.value.driveError)
+        assertFalse(viewModel.uiState.value.isLoadingDrive)
+    }
+
+    @Test
+    fun `updateDriveAccessToken automatically retries a folder fetch that previously failed for lack of a token`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            // Deliberately NOT overriding driveAccessToken here -- its default reads
+            // pushedDriveAccessToken, which is exactly what updateDriveAccessToken() writes to.
+            // Overriding it with a fixed lambda (like the other tests in this file do) would
+            // bypass the push mechanism this test needs to exercise. fetchDriveFolderContents is
+            // only ever reached once a non-null token is present (see the short-circuit in
+            // fetchCurrentDriveFolder), so it's safe for this fake to unconditionally succeed.
+            fetchDriveFolderContents = { _, _ -> fakeEntries }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.driveError)
+        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+
+        viewModel.updateDriveAccessToken("real-token")
+        advanceUntilIdle()
+
+        // This is the mechanism that fixes the cold-start race (Finding 6): when a real token
+        // arrives while a driveError from an earlier attempt is still showing, the folder is
+        // automatically re-fetched instead of leaving the user stuck on a stale error.
+        assertNull(viewModel.uiState.value.driveError)
+        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
+    }
+
+    @Test
     fun `navigateDriveFolder without a connected token sets a not-connected error and never calls the repository`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(

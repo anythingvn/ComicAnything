@@ -16,7 +16,6 @@ import com.comicanything.reader.data.pagesource.PageDecodeException
 import com.comicanything.reader.data.pagesource.UnsupportedFormatException
 import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.pagesource.decodeThumbnail
-import com.comicanything.reader.data.repository.DriveApiException
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.DriveEntry
@@ -40,6 +39,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 
 data class DriveBreadcrumb(val folderId: String, val name: String)
 
@@ -98,7 +98,29 @@ class ReaderViewModel @JvmOverloads constructor(
     // documented in ReaderViewModelTest. Wrapping it as a `() -> DriveFileCache` supplier, matching
     // the existing epubCacheRoot/cbrCacheRoot pattern, defers that construction to actual use.
     private val driveFileCache: () -> DriveFileCache = { DriveFileCache(File(application.filesDir, "drive_cache")) },
-    private val driveAccessToken: () -> String? = { null },
+    // Backing state for the token-push mechanism (see [updateDriveAccessToken]), boxed in an
+    // AtomicReference rather than exposed as a plain `var` property. A plain
+    // `private var pushedDriveAccessToken: String? = null` constructor parameter was tried first,
+    // with `driveAccessToken`'s default reading it directly -- but a primary-constructor
+    // parameter default that references an EARLIER parameter by name captures that parameter's
+    // construction-time VALUE (a local in the constructor's initialization scope), not a live
+    // read of the resulting property, so updateDriveAccessToken()'s later reassignment was
+    // invisible to the captured lambda (confirmed via a failing test: pushedDriveAccessToken read
+    // "real-token" directly while driveAccessToken() still returned null). Boxing the mutable
+    // state in a stable object sidesteps this: `pushedDriveAccessToken` itself is a `val` (the
+    // AtomicReference instance never changes, so its capture is unambiguous), and mutation
+    // happens through `.set()`/`.get()` on that object's own internal state instead.
+    private val pushedDriveAccessToken: AtomicReference<String?> = AtomicReference(null),
+    // Defaults to reading `pushedDriveAccessToken` above rather than closing over anything
+    // Activity-owned. MainActivity used to pass `driveAccessToken = { lastAccessToken }`, a
+    // closure capturing `this@MainActivity` directly -- that kept a possibly-destroyed Activity
+    // instance reachable from this retained ViewModel, and if the Activity WAS recreated, the
+    // closure kept reading the OLD (dead) instance's field forever, going permanently stale.
+    // MainActivity now instead PUSHES fresh tokens in via [updateDriveAccessToken] at the moment
+    // it obtains them. The parameter itself is kept (rather than removed) since it's still useful
+    // for direct test injection -- a test passing `driveAccessToken = { "token" }` or `{ null }`
+    // explicitly overrides the whole lambda, bypassing `pushedDriveAccessToken` entirely.
+    private val driveAccessToken: () -> String? = { pushedDriveAccessToken.get() },
     // The LOCAL short-circuit is duplicated here (matching resolveComicFile's own LOCAL check)
     // so that a LOCAL comic open never invokes `cacheProvider()` at all -- preserving the same
     // "never touches a lazy resource it doesn't need" guarantee cbrCacheRoot already has for
@@ -216,12 +238,41 @@ class ReaderViewModel @JvmOverloads constructor(
             try {
                 val entries = fetchDriveFolderContents(current.folderId, token)
                 _uiState.value = _uiState.value.copy(driveEntries = entries, isLoadingDrive = false)
-            } catch (e: DriveApiException) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Widened from `catch (e: DriveApiException)` as defense in depth, matching the
+                // pattern already used in openComic/openEpubComic: GoogleDriveRepository's own
+                // exception coverage was widened too (see its fetchFolderContents), but this is
+                // the layer that actually prevents an uncaught exception inside
+                // viewModelScope.launch from crashing the app if anything still slips through.
                 _uiState.value = _uiState.value.copy(
                     isLoadingDrive = false,
                     driveError = e.message ?: "Couldn't load this folder"
                 )
             }
+        }
+    }
+
+    /**
+     * Called by MainActivity every time it obtains a fresh Drive access token (interactive
+     * consent success, silent re-check success, or explicit connect success), and with `null` on
+     * disconnect. Replaces the old pull-based `driveAccessToken = { lastAccessToken }` closure
+     * MainActivity used to pass at ViewModel construction, which captured the Activity instance
+     * itself -- see [driveAccessToken]'s doc comment for the staleness/leak hazard that created.
+     *
+     * Also fixes the related cold-start race: `loadDriveConnectionState()` (a fast DataStore
+     * read) and the slow Play Services silent-auth round-trip that actually produces a token run
+     * concurrently on every onResume(); the fast one almost always finishes first, flipping
+     * isDriveConnected = true and triggering an auto-navigate-to-root before a real token exists
+     * yet, which previously left a stale "Connect your Google Drive to browse it" driveError on
+     * screen for an already-connected user with no automatic retry. Re-fetching here when a real
+     * token lands while that specific error is still showing closes that gap automatically.
+     */
+    fun updateDriveAccessToken(token: String?) {
+        pushedDriveAccessToken.set(token)
+        if (token != null && _uiState.value.driveError != null && _uiState.value.driveBreadcrumbs.isNotEmpty()) {
+            fetchCurrentDriveFolder()
         }
     }
 
