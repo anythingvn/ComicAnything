@@ -105,7 +105,7 @@ anything that assumes the app can read files on a real device.
 - [x] Unit tests for `LocalFileRepository` (format detection, recursive scan, empty/nonexistent-dir handling) — done in Epic 1
 - [x] Unit tests for `GoogleDriveRepository` (folder-ID extraction, JSON parsing, fallback behavior) — covered incidentally by Epic 4: `GoogleDriveRepositoryTest.kt` has 12 tests across `extractFolderId`, `parseDriveEntries` (sorting, format detection, empty/unrecognized-extension handling), and request building (Bearer auth, pagination). "Fallback behavior" as originally scoped (the old apiKey-model's silent demo-item fallback) no longer applies — that behavior was intentionally removed in Epic 4
 - [ ] Unit tests for `ReaderViewModel` state transitions (`setPage` clamping, mode/filter toggles) — permission-grant/revoke/refresh transitions already covered in Epic 1; this item now covers the remaining reader-state methods
-- [ ] Instrumented Compose UI test for reader tap-zone navigation (left/right/center regions)
+- [x] Instrumented Compose UI test for reader tap-zone navigation (left/right/center regions) — first `androidTest` in the project; `SinglePageReaderTapZoneTest.kt` opens a real CBZ and taps the actually-rendered `SinglePageReader`, covering right-zone-advances, left-zone-goes-back, center-toggles-controls, and RTL zone reversal. 4/4 passing on `comicanything_playstore`
 - [ ] Manual QA pass on a physical device or emulator covering: local scan with real files, Drive folder with a real API key, all 4 reading modes, all 5 color filters
 
 ## Epic 9 — Release Prep ⬜
