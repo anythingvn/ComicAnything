@@ -30,6 +30,10 @@ local.properties
 .cxx/
 captures/
 
+# Release signing (never commit the keystore or its credentials)
+keystore/*.keystore
+keystore/*.jks
+
 # Claude Code harness state (worktrees, etc.)
 .claude/
 
