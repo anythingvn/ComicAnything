@@ -1,6 +1,8 @@
 package com.comicanything.reader.data.repository
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class DriveFileCache(
     private val cacheDir: File,
@@ -16,13 +18,27 @@ class DriveFileCache(
 
     suspend fun download(comicId: String, download: suspend (File) -> Unit): File {
         cacheDir.mkdirs()
-        val partFile = File(cacheDir, "$comicId.part")
+        // The temp filename includes a random UUID per attempt (not just "$comicId.part") so that
+        // two concurrent downloads of the same comicId -- e.g. a user backs out of a large
+        // in-progress Drive download and re-taps the same comic -- never write to the same path.
+        // `body.byteStream().copyTo(out)` is a blocking, non-suspending call that ordinary
+        // coroutine cancellation cannot interrupt mid-write, so two writers sharing one fixed path
+        // could otherwise interleave and produce a permanently corrupted cache entry (this cache
+        // has no invalidation -- a cache hit is trusted forever). With unique temp paths, each
+        // attempt writes a complete, non-interleaved file; whichever finishes first wins the
+        // atomic rename, and the other either overwrites it with its own equally-valid copy or
+        // fails harmlessly.
+        val partFile = File(cacheDir, "$comicId.${java.util.UUID.randomUUID()}.part")
         val finalFile = File(cacheDir, comicId)
         try {
             download(partFile)
-            if (!partFile.renameTo(finalFile)) {
-                throw IllegalStateException("Couldn't finalize the downloaded file")
-            }
+            // java.io.File.renameTo is explicitly documented as platform-dependent and "might not
+            // succeed if a file with the destination abstract pathname already exists" -- which is
+            // exactly the case whenever this comicId already has a cached entry (a re-download, or
+            // two concurrent attempts racing for the same final name, as this method now allows).
+            // Files.move(..., REPLACE_EXISTING) gives a well-defined cross-platform overwrite
+            // instead of relying on unspecified per-OS rename-over-existing-file behavior.
+            Files.move(partFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
         } catch (e: Exception) {
             partFile.delete()
             throw e
