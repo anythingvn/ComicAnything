@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.sp
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.repository.DriveEntry
+import com.comicanything.reader.data.repository.LocalEntry
+import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.ui.reader.CoverLoadState
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
@@ -51,6 +53,33 @@ internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>):
     return filter { comic ->
         (formats.isEmpty() || comic.format in formats) &&
             (trimmedQuery.isEmpty() || comic.title.contains(trimmedQuery, ignoreCase = true))
+    }
+}
+
+/**
+ * Filters a folder-browse listing by [query], keeping every folder visible regardless of match
+ * (so a search never blocks navigation into a folder that might contain matching files further
+ * down) and only filtering the comic files by title.
+ */
+internal fun List<DriveEntry>.filteredDriveEntries(query: String): List<DriveEntry> {
+    val trimmedQuery = query.trim()
+    if (trimmedQuery.isEmpty()) return this
+    return filter { entry ->
+        when (entry) {
+            is DriveEntry.Folder -> true
+            is DriveEntry.ComicFile -> entry.comic.title.contains(trimmedQuery, ignoreCase = true)
+        }
+    }
+}
+
+internal fun List<LocalEntry>.filteredLocalEntries(query: String): List<LocalEntry> {
+    val trimmedQuery = query.trim()
+    if (trimmedQuery.isEmpty()) return this
+    return filter { entry ->
+        when (entry) {
+            is LocalEntry.Folder -> true
+            is LocalEntry.ComicFile -> entry.comic.title.contains(trimmedQuery, ignoreCase = true)
+        }
     }
 }
 
@@ -84,11 +113,11 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    if (homeScreenState.isSearchActive && homeScreenState.selectedTab != 1) {
+                    if (homeScreenState.isSearchActive) {
                         TextField(
                             value = homeScreenState.searchQuery,
                             onValueChange = { homeScreenState.searchQuery = it },
-                            placeholder = { Text("Search your library...") },
+                            placeholder = { Text("Search by name...") },
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.Transparent,
@@ -115,15 +144,13 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    if (homeScreenState.selectedTab != 1) {
-                        if (homeScreenState.isSearchActive) {
-                            IconButton(onClick = { homeScreenState.isSearchActive = false; homeScreenState.searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = "Close search")
-                            }
-                        } else {
-                            IconButton(onClick = { homeScreenState.isSearchActive = true }) {
-                                Icon(Icons.Default.Search, contentDescription = "Search")
-                            }
+                    if (homeScreenState.isSearchActive) {
+                        IconButton(onClick = { homeScreenState.isSearchActive = false; homeScreenState.searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close search")
+                        }
+                    } else {
+                        IconButton(onClick = { homeScreenState.isSearchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
                         }
                     }
                 },
@@ -146,11 +173,7 @@ fun HomeScreen(
                     icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
                     label = { Text("Google Drive") },
                     selected = homeScreenState.selectedTab == 1,
-                    onClick = {
-                        homeScreenState.selectedTab = 1
-                        homeScreenState.isSearchActive = false
-                        homeScreenState.searchQuery = ""
-                    }
+                    onClick = { homeScreenState.selectedTab = 1 }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Folder, contentDescription = null) },
@@ -183,6 +206,7 @@ fun HomeScreen(
                 )
                 1 -> DriveContent(
                     state = state,
+                    entries = state.driveEntries.filteredDriveEntries(homeScreenState.searchQuery),
                     input = driveUrlInput,
                     onInputChange = { driveUrlInput = it },
                     onFetchLink = { viewModel.navigateToLinkedFolder(driveUrlInput) },
@@ -195,14 +219,10 @@ fun HomeScreen(
                 )
                 2 -> LocalFilesContent(
                     state = state,
-                    viewModel = viewModel,
-                    comics = filteredLibraryComics,
-                    selectedFormats = homeScreenState.selectedFormats,
-                    onFormatToggle = { format ->
-                        homeScreenState.selectedFormats = if (format in homeScreenState.selectedFormats) homeScreenState.selectedFormats - format else homeScreenState.selectedFormats + format
-                    },
-                    isGridLayout = homeScreenState.isGridLayout,
-                    onToggleLayout = { homeScreenState.isGridLayout = !homeScreenState.isGridLayout },
+                    entries = state.localEntries.filteredLocalEntries(homeScreenState.searchQuery),
+                    isSearching = homeScreenState.searchQuery.isNotBlank(),
+                    onNavigateFolder = { path, name -> viewModel.navigateLocalFolder(path, name) },
+                    onNavigateUp = { index -> viewModel.navigateLocalUp(index) },
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )
@@ -548,6 +568,7 @@ fun ComicListRow(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Un
 @Composable
 fun DriveContent(
     state: ReaderUiState,
+    entries: List<DriveEntry>,
     input: String,
     onInputChange: (String) -> Unit,
     onFetchLink: () -> Unit,
@@ -667,10 +688,10 @@ fun DriveContent(
                     }
                 }
             }
-            state.driveEntries.isEmpty() -> {
+            entries.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "This folder is empty.",
+                        text = if (state.driveEntries.isEmpty()) "This folder is empty." else "No files match your search in this folder.",
                         color = Color.Gray,
                         fontSize = 14.sp
                     )
@@ -681,7 +702,7 @@ fun DriveContent(
                     columns = GridCells.Fixed(1),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(state.driveEntries) { entry ->
+                    items(entries) { entry ->
                         when (entry) {
                             is DriveEntry.Folder -> ListItem(
                                 headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
@@ -713,12 +734,10 @@ fun DriveContent(
 @Composable
 fun LocalFilesContent(
     state: ReaderUiState,
-    viewModel: ReaderViewModel,
-    comics: List<ComicItem>,
-    selectedFormats: Set<ComicFormat>,
-    onFormatToggle: (ComicFormat) -> Unit,
-    isGridLayout: Boolean,
-    onToggleLayout: () -> Unit,
+    entries: List<LocalEntry>,
+    isSearching: Boolean,
+    onNavigateFolder: (String, String) -> Unit,
+    onNavigateUp: (Int) -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onRequestPermission: () -> Unit
 ) {
@@ -727,24 +746,10 @@ fun LocalFilesContent(
         return
     }
 
-    if (state.isScanningLocal) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+    LaunchedEffect(state.hasStoragePermission) {
+        if (state.hasStoragePermission && state.localBreadcrumbs.isEmpty()) {
+            onNavigateFolder(LocalFileRepository.DEFAULT_ROOT, "Internal Storage")
         }
-        return
-    }
-
-    if (state.libraryComics.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text = "No comics found on this device.\nAdd PDF, CBZ, CBR, or EPUB files to your storage.",
-                color = Color.Gray,
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(32.dp)
-            )
-        }
-        return
     }
 
     Column(
@@ -752,26 +757,73 @@ fun LocalFilesContent(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        FormatFilterRow(selectedFormats = selectedFormats, onFormatToggle = onFormatToggle, isGridLayout = isGridLayout, onToggleLayout = onToggleLayout)
-
-        if (isGridLayout) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
+        if (state.localBreadcrumbs.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(comics) { comic ->
-                    ComicGridCard(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
+                state.localBreadcrumbs.forEachIndexed { index, crumb ->
+                    if (index > 0) {
+                        Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                    }
+                    Text(
+                        text = crumb.name,
+                        color = if (index == state.localBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable { onNavigateUp(index) }
+                    )
                 }
             }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(comics) { comic ->
-                    ComicListRow(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        when {
+            state.isLoadingLocalFolder -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            entries.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = if (isSearching) "No files match your search in this folder." else "This folder is empty.",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(32.dp)
+                    )
+                }
+            }
+            else -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(1),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(entries) { entry ->
+                        when (entry) {
+                            is LocalEntry.Folder -> ListItem(
+                                headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                                leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onNavigateFolder(entry.path, entry.name) }
+                                    .background(MaterialTheme.colorScheme.surface)
+                            )
+                            is LocalEntry.ComicFile -> ListItem(
+                                headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
+                                supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                                leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onOpenComic(entry.comic) }
+                                    .background(MaterialTheme.colorScheme.surface)
+                            )
+                        }
+                    }
                 }
             }
         }

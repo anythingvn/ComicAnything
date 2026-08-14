@@ -56,4 +56,41 @@ class LocalFileRepositoryTest {
 
         assertTrue(result.isEmpty())
     }
+
+    @Test
+    fun `listDirectory returns subfolders and comic files, not nested contents`() = runTest {
+        val manga = tempFolder.newFolder("Manga")
+        tempFolder.newFolder("DC")
+        File(manga, "solo_leveling.cbz").writeText("fake")
+        tempFolder.newFile("top_level.pdf")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath)
+
+        val result = repo.listDirectory(tempFolder.root.absolutePath)
+
+        val folders = result.filterIsInstance<LocalEntry.Folder>().map { it.name }
+        val files = result.filterIsInstance<LocalEntry.ComicFile>().map { it.comic.title }
+        assertEquals(listOf("DC", "Manga"), folders)
+        assertEquals(listOf("top_level.pdf"), files)
+    }
+
+    @Test
+    fun `listDirectory skips hidden folders and unsupported files`() = runTest {
+        tempFolder.newFolder(".thumbnails")
+        tempFolder.newFolder("Comics")
+        tempFolder.newFile("notes.txt")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath)
+
+        val result = repo.listDirectory(tempFolder.root.absolutePath)
+
+        assertEquals(listOf(LocalEntry.Folder(File(tempFolder.root, "Comics").absolutePath, "Comics")), result)
+    }
+
+    @Test
+    fun `listDirectory of nonexistent path returns empty list`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath)
+
+        val result = repo.listDirectory("${tempFolder.root.absolutePath}/does-not-exist")
+
+        assertTrue(result.isEmpty())
+    }
 }

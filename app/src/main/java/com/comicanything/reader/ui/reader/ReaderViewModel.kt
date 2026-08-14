@@ -21,6 +21,7 @@ import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.DriveFileCache
 import com.comicanything.reader.data.repository.GoogleDriveRepository
+import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
@@ -42,12 +43,16 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 data class DriveBreadcrumb(val folderId: String, val name: String)
+data class LocalBreadcrumb(val path: String, val name: String)
 
 data class ReaderUiState(
     val libraryComics: List<ComicItem> = emptyList(),
     val driveEntries: List<DriveEntry> = emptyList(),
     val driveBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
     val driveError: String? = null,
+    val localEntries: List<LocalEntry> = emptyList(),
+    val localBreadcrumbs: List<LocalBreadcrumb> = emptyList(),
+    val isLoadingLocalFolder: Boolean = false,
     val activeComic: ComicItem? = null,
     val currentPage: Int = 1,
     val totalPages: Int = 48,
@@ -170,7 +175,11 @@ class ReaderViewModel @JvmOverloads constructor(
         if (granted && !wasGranted) {
             loadLocalLibrary()
         } else if (!granted && wasGranted) {
-            _uiState.value = _uiState.value.copy(libraryComics = emptyList())
+            _uiState.value = _uiState.value.copy(
+                libraryComics = emptyList(),
+                localEntries = emptyList(),
+                localBreadcrumbs = emptyList()
+            )
         }
     }
 
@@ -251,6 +260,29 @@ class ReaderViewModel @JvmOverloads constructor(
                     driveError = e.message ?: "Couldn't load this folder"
                 )
             }
+        }
+    }
+
+    fun navigateLocalFolder(path: String, name: String) {
+        _uiState.value = _uiState.value.copy(
+            localBreadcrumbs = _uiState.value.localBreadcrumbs + LocalBreadcrumb(path, name)
+        )
+        fetchCurrentLocalFolder()
+    }
+
+    fun navigateLocalUp(toIndex: Int) {
+        val breadcrumbs = _uiState.value.localBreadcrumbs
+        if (toIndex !in breadcrumbs.indices) return
+        _uiState.value = _uiState.value.copy(localBreadcrumbs = breadcrumbs.take(toIndex + 1))
+        fetchCurrentLocalFolder()
+    }
+
+    private fun fetchCurrentLocalFolder() {
+        val current = _uiState.value.localBreadcrumbs.lastOrNull() ?: return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoadingLocalFolder = true)
+            val entries = localRepo.listDirectory(current.path)
+            _uiState.value = _uiState.value.copy(localEntries = entries, isLoadingLocalFolder = false)
         }
     }
 

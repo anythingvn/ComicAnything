@@ -16,6 +16,7 @@ import com.comicanything.reader.data.repository.DriveApiException
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.DriveEntry
+import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
@@ -435,6 +436,63 @@ class ReaderViewModelTest {
         assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
         assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
         assertNull(viewModel.uiState.value.driveError)
+    }
+
+    @Test
+    fun `navigateLocalFolder pushes a breadcrumb and lists the real directory's contents`() = runTest {
+        val subfolder = tempFolder.newFolder("Comics")
+        File(subfolder, "test.cbz").writeText("fake")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+
+        viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
+        advanceUntilIdle()
+
+        assertEquals(listOf("Internal Storage"), viewModel.uiState.value.localBreadcrumbs.map { it.name })
+        assertEquals(listOf("Comics"), viewModel.uiState.value.localEntries.filterIsInstance<LocalEntry.Folder>().map { it.name })
+        assertFalse(viewModel.uiState.value.isLoadingLocalFolder)
+
+        viewModel.navigateLocalFolder(subfolder.absolutePath, "Comics")
+        advanceUntilIdle()
+
+        assertEquals(listOf("Internal Storage", "Comics"), viewModel.uiState.value.localBreadcrumbs.map { it.name })
+        assertEquals(listOf("test.cbz"), viewModel.uiState.value.localEntries.filterIsInstance<LocalEntry.ComicFile>().map { it.comic.title })
+    }
+
+    @Test
+    fun `navigateLocalUp truncates local breadcrumbs to the tapped level`() = runTest {
+        val comics = tempFolder.newFolder("Comics")
+        val manga = File(comics, "Manga").apply { mkdir() }
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
+        advanceUntilIdle()
+        viewModel.navigateLocalFolder(comics.absolutePath, "Comics")
+        advanceUntilIdle()
+        viewModel.navigateLocalFolder(manga.absolutePath, "Manga")
+        advanceUntilIdle()
+        assertEquals(listOf("Internal Storage", "Comics", "Manga"), viewModel.uiState.value.localBreadcrumbs.map { it.name })
+
+        viewModel.navigateLocalUp(1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("Internal Storage", "Comics"), viewModel.uiState.value.localBreadcrumbs.map { it.name })
+    }
+
+    @Test
+    fun `revoking storage permission clears local browse state`() = runTest {
+        val subfolder = tempFolder.newFolder("Comics")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        viewModel.setPermissionGranted(true)
+        viewModel.navigateLocalFolder(subfolder.absolutePath, "Comics")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.localBreadcrumbs.isNotEmpty())
+
+        viewModel.setPermissionGranted(false)
+
+        assertTrue(viewModel.uiState.value.localBreadcrumbs.isEmpty())
+        assertTrue(viewModel.uiState.value.localEntries.isEmpty())
     }
 
     @Test
