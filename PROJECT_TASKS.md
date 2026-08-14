@@ -103,7 +103,7 @@ anything that assumes the app can read files on a real device.
 
 ## Epic 8 — Testing & Quality ⬜
 - [x] Unit tests for `LocalFileRepository` (format detection, recursive scan, empty/nonexistent-dir handling) — done in Epic 1
-- [ ] Unit tests for `GoogleDriveRepository` (folder-ID extraction, JSON parsing, fallback behavior)
+- [x] Unit tests for `GoogleDriveRepository` (folder-ID extraction, JSON parsing, fallback behavior) — covered incidentally by Epic 4: `GoogleDriveRepositoryTest.kt` has 12 tests across `extractFolderId`, `parseDriveEntries` (sorting, format detection, empty/unrecognized-extension handling), and request building (Bearer auth, pagination). "Fallback behavior" as originally scoped (the old apiKey-model's silent demo-item fallback) no longer applies — that behavior was intentionally removed in Epic 4
 - [ ] Unit tests for `ReaderViewModel` state transitions (`setPage` clamping, mode/filter toggles) — permission-grant/revoke/refresh transitions already covered in Epic 1; this item now covers the remaining reader-state methods
 - [ ] Instrumented Compose UI test for reader tap-zone navigation (left/right/center regions)
 - [ ] Manual QA pass on a physical device or emulator covering: local scan with real files, Drive folder with a real API key, all 4 reading modes, all 5 color filters
