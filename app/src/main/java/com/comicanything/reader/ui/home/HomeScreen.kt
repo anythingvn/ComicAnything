@@ -1,5 +1,6 @@
 package com.comicanything.reader.ui.home
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Book
@@ -567,23 +569,44 @@ fun DriveContent(
         }
 
         if (state.isDriveConnected && state.driveBreadcrumbs.isNotEmpty()) {
+            BackHandler(enabled = state.driveBreadcrumbs.size > 1) {
+                onNavigateUp(state.driveBreadcrumbs.size - 2)
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                state.driveBreadcrumbs.forEachIndexed { index, crumb ->
-                    if (index > 0) {
-                        Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                if (state.driveBreadcrumbs.size > 1) {
+                    IconButton(
+                        onClick = { onNavigateUp(state.driveBreadcrumbs.size - 2) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Up one folder",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
-                    Text(
-                        text = crumb.name,
-                        color = if (index == state.driveBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
-                        fontSize = 13.sp,
-                        modifier = Modifier.clickable { onNavigateUp(index) }
-                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    state.driveBreadcrumbs.forEachIndexed { index, crumb ->
+                        if (index > 0) {
+                            Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                        }
+                        Text(
+                            text = crumb.name,
+                            color = if (index == state.driveBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
+                            fontSize = 13.sp,
+                            modifier = Modifier.clickable { onNavigateUp(index) }
+                        )
+                    }
                 }
             }
         }
@@ -707,22 +730,43 @@ fun LocalFilesContent(
             .padding(16.dp)
     ) {
         if (state.localBreadcrumbs.isNotEmpty()) {
+            BackHandler(enabled = state.localBreadcrumbs.size > 1) {
+                onNavigateUp(state.localBreadcrumbs.size - 2)
+            }
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                state.localBreadcrumbs.forEachIndexed { index, crumb ->
-                    if (index > 0) {
-                        Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                if (state.localBreadcrumbs.size > 1) {
+                    IconButton(
+                        onClick = { onNavigateUp(state.localBreadcrumbs.size - 2) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Up one folder",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
-                    Text(
-                        text = crumb.name,
-                        color = if (index == state.localBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
-                        fontSize = 13.sp,
-                        modifier = Modifier.clickable { onNavigateUp(index) }
-                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    state.localBreadcrumbs.forEachIndexed { index, crumb ->
+                        if (index > 0) {
+                            Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                        }
+                        Text(
+                            text = crumb.name,
+                            color = if (index == state.localBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
+                            fontSize = 13.sp,
+                            modifier = Modifier.clickable { onNavigateUp(index) }
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))

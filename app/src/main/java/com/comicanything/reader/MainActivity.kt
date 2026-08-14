@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -85,6 +86,22 @@ class MainActivity : ComponentActivity() {
                     val homeScreenState = rememberHomeScreenState()
 
                     val activeComic = state.activeComic
+                    val closeReader = {
+                        viewModel.closeComic()
+                        // libraryComics is a separately-scanned list (see
+                        // LocalFileRepository.scanStorageDirectories vs listDirectory) -- opening
+                        // a comic from Local Files' folder browser mutates a DIFFERENT ComicItem
+                        // instance than the one sitting in libraryComics, so the just-persisted
+                        // progress never becomes visible to the Continue Reading tab without an
+                        // explicit refresh.
+                        viewModel.refreshLibrary()
+                    }
+                    // Without this, the system back gesture/button has no Compose-level handler
+                    // anywhere in the app (confirmed: no other BackHandler exists), so it falls
+                    // through to the Activity's default behavior and exits the app entirely
+                    // instead of closing the open comic first -- surprising and destructive
+                    // (loses the "did you mean to leave" moment a reader app should have).
+                    BackHandler(enabled = activeComic != null) { closeReader() }
                     when {
                         activeComic == null -> HomeScreen(
                             viewModel = viewModel,
@@ -97,24 +114,12 @@ class MainActivity : ComponentActivity() {
                         activeComic.format == ComicFormat.EPUB -> EpubReaderScreen(
                             comic = activeComic,
                             viewModel = viewModel,
-                            onBack = {
-                                viewModel.closeComic()
-                                // libraryComics is a separately-scanned list (see
-                                // LocalFileRepository.scanStorageDirectories vs listDirectory) --
-                                // opening a comic from Local Files' folder browser mutates a
-                                // DIFFERENT ComicItem instance than the one sitting in
-                                // libraryComics, so the just-persisted progress never becomes
-                                // visible to the Continue Reading tab without an explicit refresh.
-                                viewModel.refreshLibrary()
-                            }
+                            onBack = closeReader
                         )
                         else -> ReaderScreen(
                             comic = activeComic,
                             viewModel = viewModel,
-                            onBack = {
-                                viewModel.closeComic()
-                                viewModel.refreshLibrary()
-                            }
+                            onBack = closeReader
                         )
                     }
                 }
