@@ -106,7 +106,8 @@ fun HomeScreen(
     onOpenComic: (ComicItem) -> Unit,
     onRequestPermission: () -> Unit,
     onConnectDrive: () -> Unit,
-    onDisconnectDrive: () -> Unit
+    onDisconnectDrive: () -> Unit,
+    onSwitchDriveAccount: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     var driveUrlInput by remember { mutableStateOf("") }
@@ -223,7 +224,8 @@ fun HomeScreen(
                     onRetry = { viewModel.retryDriveFolder() },
                     onOpenComic = onOpenComic,
                     onConnectDrive = onConnectDrive,
-                    onDisconnectDrive = onDisconnectDrive
+                    onDisconnectDrive = onDisconnectDrive,
+                    onSwitchDriveAccount = onSwitchDriveAccount
                 )
                 2 -> LocalFilesContent(
                     state = state,
@@ -528,9 +530,10 @@ fun DriveContent(
     onRetry: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onConnectDrive: () -> Unit,
-    onDisconnectDrive: () -> Unit
+    onDisconnectDrive: () -> Unit,
+    onSwitchDriveAccount: () -> Unit
 ) {
-    LaunchedEffect(state.isDriveConnected) {
+    LaunchedEffect(state.driveConnectionVersion) {
         if (state.isDriveConnected && state.driveBreadcrumbs.isEmpty()) {
             onNavigateFolder("root", "My Drive")
         }
@@ -552,6 +555,9 @@ fun DriveContent(
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
+                TextButton(onClick = onSwitchDriveAccount) {
+                    Text("Switch Account")
+                }
                 TextButton(onClick = onDisconnectDrive) {
                     Text("Disconnect")
                 }

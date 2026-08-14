@@ -71,6 +71,12 @@ data class ReaderUiState(
     val pageSourceGeneration: Int = 0,
     val isDriveConnected: Boolean = false,
     val driveAccountEmail: String? = null,
+    // Increments on every successful (re-)authorization, including switching to the SAME
+    // account. DriveContent's auto-navigate-to-root LaunchedEffect keys on this instead of
+    // isDriveConnected -- that boolean doesn't change value when switching accounts while
+    // already connected, so it would never re-fire and the UI would get stuck showing cleared
+    // (empty) breadcrumbs/entries with no re-fetch.
+    val driveConnectionVersion: Int = 0,
     val epubBook: EpubBook? = null
 )
 
@@ -327,7 +333,19 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun onDriveAuthorized(accountEmail: String?) {
-        _uiState.value = _uiState.value.copy(isDriveConnected = true, driveAccountEmail = accountEmail)
+        // Clearing driveEntries/driveBreadcrumbs here matters for the account-switch path
+        // (MainActivity.switchDriveAccount()): without it, browsing state from the PREVIOUS
+        // account (a folder ID deep in someone else's Drive) would stick around and get
+        // re-fetched against the NEW account's token, either erroring out or leaking a stale
+        // view. A fresh connect already starts with empty breadcrumbs, so this is a no-op there.
+        _uiState.value = _uiState.value.copy(
+            isDriveConnected = true,
+            driveAccountEmail = accountEmail,
+            driveEntries = emptyList(),
+            driveBreadcrumbs = emptyList(),
+            driveError = null,
+            driveConnectionVersion = _uiState.value.driveConnectionVersion + 1
+        )
         viewModelScope.launch {
             connectionRepo.save(DriveConnectionHint(isConnected = true, accountEmail = accountEmail))
         }

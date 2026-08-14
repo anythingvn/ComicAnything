@@ -858,6 +858,40 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `onDriveAuthorized clears stale browsing state from a previous account`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> fakeEntries }
+        )
+        viewModel.onDriveAuthorized("first@example.com")
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isNotEmpty())
+        assertTrue(viewModel.uiState.value.driveEntries.isNotEmpty())
+
+        val versionBeforeSwitch = viewModel.uiState.value.driveConnectionVersion
+
+        // Simulates MainActivity.switchDriveAccount(): re-authorizing with a DIFFERENT account
+        // while old browsing state (a folder ID from the first account's Drive) is still around.
+        viewModel.onDriveAuthorized("second@example.com")
+
+        assertEquals("second@example.com", viewModel.uiState.value.driveAccountEmail)
+        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
+        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+        // DriveContent's auto-navigate-to-root LaunchedEffect keys on this field specifically
+        // because isDriveConnected alone doesn't change value on a switch-while-connected -- see
+        // the field's doc comment in ReaderUiState for why that would otherwise get the UI stuck.
+        assertTrue(viewModel.uiState.value.driveConnectionVersion > versionBeforeSwitch)
+    }
+
+    @Test
     fun `onDriveAuthorized with a null email still marks connected`() = runTest {
         val connectionDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
             scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),

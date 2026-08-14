@@ -1,6 +1,8 @@
 package com.comicanything.reader
 
 import android.Manifest
+import android.accounts.Account
+import android.accounts.AccountManager
 import android.content.ActivityNotFoundException
 import android.os.Build
 import android.os.Bundle
@@ -74,6 +76,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Launches the OS's own "choose an account" dialog (not a Google Sign-In/Authorization API
+    // screen -- a separate, stable Android system UI) so the user can pick which on-device
+    // Google account to connect. See switchDriveAccount() for why this is needed at all: a plain
+    // authorize() call reuses whatever account already has a valid grant with zero UI, so there
+    // was previously no way to ever pick a different one.
+    private val chooseAccountLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { activityResult ->
+        val accountName = activityResult.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+        if (accountName != null) {
+            authorizeDriveAccount(Account(accountName, "com.google"))
+        }
+        // A null accountName means the user backed out of the chooser -- leave whatever
+        // connection state already existed untouched rather than treating it as a failure.
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Reading mode / color filter / auto-crop are simple global preferences that don't
@@ -113,7 +131,8 @@ class MainActivity : ComponentActivity() {
                             onOpenComic = { comic -> viewModel.openComic(comic) },
                             onRequestPermission = { requestStoragePermission() },
                             onConnectDrive = { connectDrive() },
-                            onDisconnectDrive = { disconnectDrive() }
+                            onDisconnectDrive = { disconnectDrive() },
+                            onSwitchDriveAccount = { switchDriveAccount() }
                         )
                         activeComic.format == ComicFormat.EPUB -> EpubReaderScreen(
                             comic = activeComic,
@@ -218,6 +237,51 @@ class MainActivity : ComponentActivity() {
                     viewModel.updateDriveAccessToken(result.accessToken)
                     // accountEmail = null: see the comment in checkDriveAuthorizationSilently().
                     viewModel.onDriveAuthorized(accountEmail = null)
+                }
+            }
+            .addOnFailureListener { e ->
+                Log.w("MainActivity", "Drive authorization request failed", e)
+                viewModel.onDriveAuthorizationFailed()
+            }
+    }
+
+    // Shows the OS account chooser, then authorizes against whichever account the user picks --
+    // this is the actual fix for "can't switch accounts": a plain authorize() (connectDrive()
+    // above) silently reuses whatever account already has a valid grant with zero UI, since
+    // clearToken() in disconnectDrive() only clears the LOCAL token cache, not the server-side
+    // grant. Explicitly targeting the chosen account via AuthorizationRequest.setAccount()
+    // bypasses that silent reuse: if the user picks a different account than the one currently
+    // connected, Play Services has no cached grant for it and must show real interactive
+    // consent, landing on the new account instead.
+    private fun switchDriveAccount() {
+        val intent = AccountManager.newChooseAccountIntent(
+            null, null, arrayOf("com.google"), null, null, null, null
+        )
+        chooseAccountLauncher.launch(intent)
+    }
+
+    private fun authorizeDriveAccount(account: Account) {
+        val request = AuthorizationRequest.builder()
+            .setRequestedScopes(listOf(Scope(DRIVE_READONLY_SCOPE)))
+            .setAccount(account)
+            .build()
+        Identity.getAuthorizationClient(this)
+            .authorize(request)
+            .addOnSuccessListener { result ->
+                if (result.hasResolution()) {
+                    val pendingIntent = result.pendingIntent ?: run {
+                        viewModel.onDriveAuthorizationFailed()
+                        return@addOnSuccessListener
+                    }
+                    driveAuthLauncher.launch(
+                        IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                    )
+                } else {
+                    lastAccessToken = result.accessToken
+                    viewModel.updateDriveAccessToken(result.accessToken)
+                    // Unlike connectDrive()'s accountEmail = null, we genuinely know which
+                    // account this is here -- the user just picked it from the chooser.
+                    viewModel.onDriveAuthorized(accountEmail = account.name)
                 }
             }
             .addOnFailureListener { e ->
