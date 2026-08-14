@@ -5,7 +5,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -142,6 +144,23 @@ fun ReaderScreen(
                             FilterChip(
                                 selected = state.readingMode == mode,
                                 onClick = { viewModel.setReadingMode(mode) },
+                                label = { Text(mode.name) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Theme", color = Color.Gray, fontSize = 12.sp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .padding(vertical = 8.dp)
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        ColorFilterMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = state.filterMode == mode,
+                                onClick = { viewModel.setFilterMode(mode) },
                                 label = { Text(mode.name) }
                             )
                         }
