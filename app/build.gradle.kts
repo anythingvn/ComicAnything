@@ -11,6 +11,14 @@ android {
         applicationId = "com.comicanything.reader"
         minSdk = 24
         targetSdk = 34
+
+        // Versioning convention (Epic 9): semantic versioning for versionName
+        // (MAJOR.MINOR.PATCH — MAJOR for breaking/incompatible data changes, MINOR for new
+        // user-facing features, PATCH for fixes only), and versionCode as a plain integer that
+        // must strictly increase on every build published to the Play Store (Play Store rejects
+        // a re-upload with a versionCode <= the last published one — it does not need to track
+        // versionName in any particular way, just monotonically increase). Bump both together
+        // when cutting a release: e.g. 1.0.0 -> 1.1.0 for a feature release is versionCode 1 -> 2.
         versionCode = 1
         versionName = "1.0.0"
 
