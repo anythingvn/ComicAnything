@@ -3,6 +3,7 @@ package com.comicanything.reader.ui.home
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -10,8 +11,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Close
@@ -37,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
+import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.ui.reader.CoverLoadState
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
@@ -177,7 +181,18 @@ fun HomeScreen(
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )
-                1 -> DriveContent(state, driveUrlInput, onInputChange = { driveUrlInput = it }, onFetch = { viewModel.fetchDriveFolder(driveUrlInput) }, onOpenComic, onConnectDrive, onDisconnectDrive)
+                1 -> DriveContent(
+                    state = state,
+                    input = driveUrlInput,
+                    onInputChange = { driveUrlInput = it },
+                    onFetchLink = { viewModel.navigateToLinkedFolder(driveUrlInput) },
+                    onNavigateFolder = { id, name -> viewModel.navigateDriveFolder(id, name) },
+                    onNavigateUp = { index -> viewModel.navigateDriveUp(index) },
+                    onRetry = { viewModel.retryDriveFolder() },
+                    onOpenComic = onOpenComic,
+                    onConnectDrive = onConnectDrive,
+                    onDisconnectDrive = onDisconnectDrive
+                )
                 2 -> LocalFilesContent(
                     state = state,
                     viewModel = viewModel,
@@ -535,37 +550,42 @@ fun DriveContent(
     state: ReaderUiState,
     input: String,
     onInputChange: (String) -> Unit,
-    onFetch: () -> Unit,
+    onFetchLink: () -> Unit,
+    onNavigateFolder: (String, String) -> Unit,
+    onNavigateUp: (Int) -> Unit,
+    onRetry: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onConnectDrive: () -> Unit,
     onDisconnectDrive: () -> Unit
 ) {
+    LaunchedEffect(state.isDriveConnected) {
+        if (state.isDriveConnected && state.driveBreadcrumbs.isEmpty()) {
+            onNavigateFolder("root", "My Drive")
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        if (state.isDriveConnected) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (state.isDriveConnected) {
                 Text(
                     text = "Connected" + (state.driveAccountEmail?.let { " as $it" } ?: ""),
-                    color = Color.White,
+                    color = Color.Gray,
+                    fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = onDisconnectDrive) {
                     Text("Disconnect")
                 }
-            }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            } else {
                 Text(
-                    text = "Optional: connect your Google Drive to read comics stored there.",
+                    text = "Connect your Google Drive to browse it.",
                     color = Color.Gray,
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
@@ -576,14 +596,36 @@ fun DriveContent(
             }
         }
 
+        if (state.isDriveConnected && state.driveBreadcrumbs.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                state.driveBreadcrumbs.forEachIndexed { index, crumb ->
+                    if (index > 0) {
+                        Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                    }
+                    Text(
+                        text = crumb.name,
+                        color = if (index == state.driveBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable { onNavigateUp(index) }
+                    )
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(
             value = input,
             onValueChange = onInputChange,
-            label = { Text("Paste Google Drive Folder URL / ID") },
+            label = { Text("Jump to folder (paste a Drive folder URL/ID)") },
             trailingIcon = {
-                IconButton(onClick = onFetch) {
+                IconButton(onClick = onFetchLink) {
                     Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 }
             },
@@ -593,34 +635,75 @@ fun DriveContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (state.isLoadingDrive) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        when {
+            state.isLoadingDrive -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
             }
-        } else if (state.driveComics.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "No Drive folder linked yet.\nPaste a shared Drive folder link above!",
-                    color = Color.Gray,
-                    fontSize = 14.sp
-                )
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(1),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(state.driveComics) { comic ->
-                    ListItem(
-                        headlineContent = { Text(comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
-                        supportingContent = { Text(comic.folderName ?: "", color = Color.Gray, fontSize = 12.sp) },
-                        leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                        trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onOpenComic(comic) }
-                            .background(MaterialTheme.colorScheme.surface)
+            !state.isDriveConnected -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Connect your Google Drive above to browse your files.",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
                     )
+                }
+            }
+            state.driveError != null -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = state.driveError,
+                            color = Color.Gray,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = onRetry) {
+                            Text("Retry")
+                        }
+                    }
+                }
+            }
+            state.driveEntries.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "This folder is empty.",
+                        color = Color.Gray,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+            else -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(1),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(state.driveEntries) { entry ->
+                        when (entry) {
+                            is DriveEntry.Folder -> ListItem(
+                                headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                                leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onNavigateFolder(entry.id, entry.name) }
+                                    .background(MaterialTheme.colorScheme.surface)
+                            )
+                            is DriveEntry.ComicFile -> ListItem(
+                                headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
+                                supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                                leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onOpenComic(entry.comic) }
+                                    .background(MaterialTheme.colorScheme.surface)
+                            )
+                        }
+                    }
                 }
             }
         }

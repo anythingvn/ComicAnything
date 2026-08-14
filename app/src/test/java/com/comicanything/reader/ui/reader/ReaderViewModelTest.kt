@@ -12,8 +12,10 @@ import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
 import com.comicanything.reader.data.model.ReadingMode
+import com.comicanything.reader.data.repository.DriveApiException
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
+import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
@@ -171,13 +173,60 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `opening a Google Drive comic sets an error even for a supported format`() = runTest {
+    fun `opening a Google Drive comic resolves through the injected resolver and opens normally`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val driveFile = File(tempFolder.newFolder("drive-cache"), "cached.cbz")
+        java.util.zip.ZipOutputStream(driveFile.outputStream()).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zip.write("fake-jpeg-bytes".toByteArray())
+            zip.closeEntry()
+        }
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            comicFileResolver = { _, _, _ -> driveFile }
+        )
         val comic = ComicItem(
             id = "2",
             title = "Drive Book",
-            pathOrUrl = "https://drive.google.com/fake.pdf",
+            pathOrUrl = "https://www.googleapis.com/drive/v3/files/2?alt=media",
+            source = ComicSource.GOOGLE_DRIVE,
+            format = ComicFormat.CBZ
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        // The old behavior always set pageLoadError = "This format isn't supported yet" purely
+        // because comic.source was GOOGLE_DRIVE. Now that createPageSource no longer gates on
+        // source at all (resolution happens first via the injected comicFileResolver), a Drive
+        // comic opens through the exact same CbzPageSource path a LOCAL CBZ would -- totalPages
+        // comes from real zip-entry listing, not BitmapFactory decode, so this is a genuine
+        // assertion. pageLoadError is deliberately not asserted here: openComic's success path
+        // still calls loadPage(), which decodes page 1 via BitmapFactory -- unavailable in this
+        // project's plain-JVM unit test environment (no Robolectric), the same accepted
+        // limitation already documented for the CBR/PDF/CBZ tests elsewhere in this file.
+        assertEquals(1, viewModel.uiState.value.totalPages)
+    }
+
+    @Test
+    fun `a Drive download failure surfaces through pageLoadError like any other open failure`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            comicFileResolver = { _, _, _ -> throw DriveApiException("Not connected to Google Drive") }
+        )
+        val comic = ComicItem(
+            id = "3",
+            title = "Drive Book",
+            pathOrUrl = "https://www.googleapis.com/drive/v3/files/3?alt=media",
             source = ComicSource.GOOGLE_DRIVE,
             format = ComicFormat.PDF
         )
@@ -185,7 +234,207 @@ class ReaderViewModelTest {
         viewModel.openComic(comic)
         advanceUntilIdle()
 
-        assertEquals("This format isn't supported yet", viewModel.uiState.value.pageLoadError)
+        assertEquals("Not connected to Google Drive", viewModel.uiState.value.pageLoadError)
+    }
+
+    @Test
+    fun `opening a LOCAL comic never touches driveFileCache or driveAccessToken`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var driveAccessTokenCalls = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { driveAccessTokenCalls++; "should-not-be-used" }
+        )
+        val comic = ComicItem(
+            id = "4",
+            title = "Local Book",
+            pathOrUrl = "/fake/path.cbz",
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        // Proves comicFileResolver's default (calling resolveComicFile for real) genuinely takes
+        // the LOCAL passthrough branch without ever invoking driveAccessToken -- matching the same
+        // laziness guarantee cbrCacheRoot already has for non-CBR opens.
+        assertEquals(0, driveAccessTokenCalls)
+    }
+
+    @Test
+    fun `navigateDriveFolder pushes a breadcrumb and populates driveEntries on success`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> fakeEntries }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        assertEquals(listOf("My Drive"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
+        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
+        assertNull(viewModel.uiState.value.driveError)
+        assertFalse(viewModel.uiState.value.isLoadingDrive)
+    }
+
+    @Test
+    fun `navigateDriveFolder surfaces a DriveApiException from the fetch as driveError`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> throw DriveApiException("Couldn't reach Google Drive -- check your connection") }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        assertEquals("Couldn't reach Google Drive -- check your connection", viewModel.uiState.value.driveError)
+        assertFalse(viewModel.uiState.value.isLoadingDrive)
+    }
+
+    @Test
+    fun `navigateDriveFolder surfaces a generic exception as driveError instead of crashing`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> throw IllegalStateException("boom") }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        // Proves fetchCurrentDriveFolder's catch was widened from `catch (e: DriveApiException)`
+        // to also catch plain Exception. GoogleDriveRepository can throw more than
+        // DriveApiException from deep inside response.use { } (a raw IOException from a dropped
+        // connection mid-read, or a JSONException from a non-JSON response body) -- this fake uses
+        // a plain IllegalStateException to prove the VM-level widening independently of the
+        // repository layer's own widening: without it, this exception would propagate out of
+        // viewModelScope.launch uncaught and crash the app instead of landing in driveError.
+        assertEquals("boom", viewModel.uiState.value.driveError)
+        assertFalse(viewModel.uiState.value.isLoadingDrive)
+    }
+
+    @Test
+    fun `updateDriveAccessToken automatically retries a folder fetch that previously failed for lack of a token`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            // Deliberately NOT overriding driveAccessToken here -- its default reads
+            // pushedDriveAccessToken, which is exactly what updateDriveAccessToken() writes to.
+            // Overriding it with a fixed lambda (like the other tests in this file do) would
+            // bypass the push mechanism this test needs to exercise. fetchDriveFolderContents is
+            // only ever reached once a non-null token is present (see the short-circuit in
+            // fetchCurrentDriveFolder), so it's safe for this fake to unconditionally succeed.
+            fetchDriveFolderContents = { _, _ -> fakeEntries }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.driveError)
+        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+
+        viewModel.updateDriveAccessToken("real-token")
+        advanceUntilIdle()
+
+        // This is the mechanism that fixes the cold-start race (Finding 6): when a real token
+        // arrives while a driveError from an earlier attempt is still showing, the folder is
+        // automatically re-fetched instead of leaving the user stuck on a stale error.
+        assertNull(viewModel.uiState.value.driveError)
+        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
+    }
+
+    @Test
+    fun `navigateDriveFolder without a connected token sets a not-connected error and never calls the repository`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { null }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.driveError)
+        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+    }
+
+    @Test
+    fun `navigateDriveUp truncates breadcrumbs to the tapped level`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { null } // forces a fast, deterministic driveError instead of a real network call
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        viewModel.navigateDriveFolder("sub1", "Comics")
+        advanceUntilIdle()
+        viewModel.navigateDriveFolder("sub2", "Volume 1")
+        advanceUntilIdle()
+        assertEquals(listOf("My Drive", "Comics", "Volume 1"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
+
+        viewModel.navigateDriveUp(1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("My Drive", "Comics"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
+    }
+
+    @Test
+    fun `disconnectDrive clears driveEntries, breadcrumbs, and driveError`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { null }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isNotEmpty())
+        assertTrue(viewModel.uiState.value.driveError != null)
+
+        viewModel.disconnectDrive()
+
+        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
+        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+        assertNull(viewModel.uiState.value.driveError)
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.comicanything.reader.data.epub.extractEpub
 import com.comicanything.reader.data.model.ColorFilterMode
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
+import com.comicanything.reader.data.model.ComicSource
 import com.comicanything.reader.data.model.ReadingMode
 import com.comicanything.reader.data.pagesource.PageBitmapCache
 import com.comicanything.reader.data.pagesource.PageDecodeException
@@ -17,10 +18,13 @@ import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.pagesource.decodeThumbnail
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
+import com.comicanything.reader.data.repository.DriveEntry
+import com.comicanything.reader.data.repository.DriveFileCache
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
+import com.comicanything.reader.data.repository.resolveComicFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -35,10 +39,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
+
+data class DriveBreadcrumb(val folderId: String, val name: String)
 
 data class ReaderUiState(
     val libraryComics: List<ComicItem> = emptyList(),
-    val driveComics: List<ComicItem> = emptyList(),
+    val driveEntries: List<DriveEntry> = emptyList(),
+    val driveBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
+    val driveError: String? = null,
     val activeComic: ComicItem? = null,
     val currentPage: Int = 1,
     val totalPages: Int = 48,
@@ -80,7 +89,54 @@ class ReaderViewModel @JvmOverloads constructor(
     private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail,
     private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub,
     private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") },
-    private val cbrCacheRoot: () -> File = { File(application.cacheDir, "cbr_temp") }
+    private val cbrCacheRoot: () -> File = { File(application.cacheDir, "cbr_temp") },
+    // A plain (non-lambda) `DriveFileCache = DriveFileCache(File(application.filesDir, ...))`
+    // default would construct eagerly at every ReaderViewModel construction (Kotlin evaluates
+    // constructor parameter defaults unconditionally when the caller omits the argument),
+    // immediately touching Context.getFilesDir() -- an Android stub-jar method that throws "not
+    // mocked" in plain JVM unit tests, exactly like the progressRepo/connectionRepo hazard
+    // documented in ReaderViewModelTest. Wrapping it as a `() -> DriveFileCache` supplier, matching
+    // the existing epubCacheRoot/cbrCacheRoot pattern, defers that construction to actual use.
+    private val driveFileCache: () -> DriveFileCache = { DriveFileCache(File(application.filesDir, "drive_cache")) },
+    // Backing state for the token-push mechanism (see [updateDriveAccessToken]), boxed in an
+    // AtomicReference rather than exposed as a plain `var` property. A plain
+    // `private var pushedDriveAccessToken: String? = null` constructor parameter was tried first,
+    // with `driveAccessToken`'s default reading it directly -- but a primary-constructor
+    // parameter default that references an EARLIER parameter by name captures that parameter's
+    // construction-time VALUE (a local in the constructor's initialization scope), not a live
+    // read of the resulting property, so updateDriveAccessToken()'s later reassignment was
+    // invisible to the captured lambda (confirmed via a failing test: pushedDriveAccessToken read
+    // "real-token" directly while driveAccessToken() still returned null). Boxing the mutable
+    // state in a stable object sidesteps this: `pushedDriveAccessToken` itself is a `val` (the
+    // AtomicReference instance never changes, so its capture is unambiguous), and mutation
+    // happens through `.set()`/`.get()` on that object's own internal state instead.
+    private val pushedDriveAccessToken: AtomicReference<String?> = AtomicReference(null),
+    // Defaults to reading `pushedDriveAccessToken` above rather than closing over anything
+    // Activity-owned. MainActivity used to pass `driveAccessToken = { lastAccessToken }`, a
+    // closure capturing `this@MainActivity` directly -- that kept a possibly-destroyed Activity
+    // instance reachable from this retained ViewModel, and if the Activity WAS recreated, the
+    // closure kept reading the OLD (dead) instance's field forever, going permanently stale.
+    // MainActivity now instead PUSHES fresh tokens in via [updateDriveAccessToken] at the moment
+    // it obtains them. The parameter itself is kept (rather than removed) since it's still useful
+    // for direct test injection -- a test passing `driveAccessToken = { "token" }` or `{ null }`
+    // explicitly overrides the whole lambda, bypassing `pushedDriveAccessToken` entirely.
+    private val driveAccessToken: () -> String? = { pushedDriveAccessToken.get() },
+    // The LOCAL short-circuit is duplicated here (matching resolveComicFile's own LOCAL check)
+    // so that a LOCAL comic open never invokes `cacheProvider()` at all -- preserving the same
+    // "never touches a lazy resource it doesn't need" guarantee cbrCacheRoot already has for
+    // non-CBR formats. Calling resolveComicFile(comic, cacheProvider(), ...) unconditionally would
+    // defeat driveFileCache's laziness, since Kotlin evaluates function arguments (including
+    // cacheProvider()) before the callee runs, regardless of what branch resolveComicFile takes
+    // internally.
+    private val comicFileResolver: suspend (ComicItem, () -> DriveFileCache, () -> String?) -> File =
+        { comic, cacheProvider, token ->
+            if (comic.source == ComicSource.LOCAL) {
+                File(comic.pathOrUrl)
+            } else {
+                resolveComicFile(comic, cacheProvider(), driveRepo::downloadFile, token)
+            }
+        },
+    private val fetchDriveFolderContents: suspend (String, String) -> List<DriveEntry> = driveRepo::fetchFolderContents
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -144,11 +200,79 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    fun fetchDriveFolder(folderUrlOrId: String, apiKey: String? = null) {
+    fun navigateToLinkedFolder(folderUrlOrId: String) {
+        val folderId = driveRepo.extractFolderId(folderUrlOrId)
+        navigateDriveFolder(folderId, name = folderId)
+    }
+
+    fun navigateDriveFolder(folderId: String, name: String) {
+        _uiState.value = _uiState.value.copy(
+            driveBreadcrumbs = _uiState.value.driveBreadcrumbs + DriveBreadcrumb(folderId, name)
+        )
+        fetchCurrentDriveFolder()
+    }
+
+    fun navigateDriveUp(toIndex: Int) {
+        val breadcrumbs = _uiState.value.driveBreadcrumbs
+        if (toIndex !in breadcrumbs.indices) return
+        _uiState.value = _uiState.value.copy(driveBreadcrumbs = breadcrumbs.take(toIndex + 1))
+        fetchCurrentDriveFolder()
+    }
+
+    fun retryDriveFolder() {
+        fetchCurrentDriveFolder()
+    }
+
+    private fun fetchCurrentDriveFolder() {
+        val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingDrive = true)
-            val items = driveRepo.fetchFolderContents(folderUrlOrId, apiKey)
-            _uiState.value = _uiState.value.copy(driveComics = items, isLoadingDrive = false)
+            _uiState.value = _uiState.value.copy(isLoadingDrive = true, driveError = null)
+            val token = driveAccessToken()
+            if (token == null) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingDrive = false,
+                    driveError = "Connect your Google Drive to browse it"
+                )
+                return@launch
+            }
+            try {
+                val entries = fetchDriveFolderContents(current.folderId, token)
+                _uiState.value = _uiState.value.copy(driveEntries = entries, isLoadingDrive = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Widened from `catch (e: DriveApiException)` as defense in depth, matching the
+                // pattern already used in openComic/openEpubComic: GoogleDriveRepository's own
+                // exception coverage was widened too (see its fetchFolderContents), but this is
+                // the layer that actually prevents an uncaught exception inside
+                // viewModelScope.launch from crashing the app if anything still slips through.
+                _uiState.value = _uiState.value.copy(
+                    isLoadingDrive = false,
+                    driveError = e.message ?: "Couldn't load this folder"
+                )
+            }
+        }
+    }
+
+    /**
+     * Called by MainActivity every time it obtains a fresh Drive access token (interactive
+     * consent success, silent re-check success, or explicit connect success), and with `null` on
+     * disconnect. Replaces the old pull-based `driveAccessToken = { lastAccessToken }` closure
+     * MainActivity used to pass at ViewModel construction, which captured the Activity instance
+     * itself -- see [driveAccessToken]'s doc comment for the staleness/leak hazard that created.
+     *
+     * Also fixes the related cold-start race: `loadDriveConnectionState()` (a fast DataStore
+     * read) and the slow Play Services silent-auth round-trip that actually produces a token run
+     * concurrently on every onResume(); the fast one almost always finishes first, flipping
+     * isDriveConnected = true and triggering an auto-navigate-to-root before a real token exists
+     * yet, which previously left a stale "Connect your Google Drive to browse it" driveError on
+     * screen for an already-connected user with no automatic retry. Re-fetching here when a real
+     * token lands while that specific error is still showing closes that gap automatically.
+     */
+    fun updateDriveAccessToken(token: String?) {
+        pushedDriveAccessToken.set(token)
+        if (token != null && _uiState.value.driveError != null && _uiState.value.driveBreadcrumbs.isNotEmpty()) {
+            fetchCurrentDriveFolder()
         }
     }
 
@@ -190,7 +314,13 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun disconnectDrive() {
-        _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
+        _uiState.value = _uiState.value.copy(
+            isDriveConnected = false,
+            driveAccountEmail = null,
+            driveEntries = emptyList(),
+            driveBreadcrumbs = emptyList(),
+            driveError = null
+        )
         viewModelScope.launch {
             connectionRepo.save(DriveConnectionHint(isConnected = false, accountEmail = null))
         }
@@ -216,7 +346,10 @@ class ReaderViewModel @JvmOverloads constructor(
         activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val source = try {
-                withContext(ioDispatcher) { createPageSource(comic, cbrCacheRoot) }
+                withContext(ioDispatcher) {
+                    val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                    createPageSource(comic, cbrCacheRoot, file)
+                }
             } catch (e: UnsupportedFormatException) {
                 // A newer open may have superseded this one while the page source was being
                 // created -- only surface this error if this open is still the active one, so a
@@ -307,7 +440,19 @@ class ReaderViewModel @JvmOverloads constructor(
         activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val extractionDir = File(epubCacheRoot(), comic.id)
-            val book = withContext(ioDispatcher) { epubExtractor(File(comic.pathOrUrl), extractionDir) }
+            val book = try {
+                withContext(ioDispatcher) {
+                    val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                    epubExtractor(file, extractionDir)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (_uiState.value.activeComic?.id == comic.id) {
+                    _uiState.value = _uiState.value.copy(pageLoadError = e.message ?: "Couldn't open this EPUB file")
+                }
+                return@launch
+            }
             if (_uiState.value.activeComic?.id != comic.id) {
                 // A newer open superseded this one while extraction was in flight -- discard
                 // this result and clean up its directory rather than applying stale state.
