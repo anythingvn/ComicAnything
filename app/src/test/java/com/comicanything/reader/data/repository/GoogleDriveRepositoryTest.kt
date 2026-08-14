@@ -22,14 +22,15 @@ class GoogleDriveRepositoryTest {
     }
 
     @Test
-    fun `buildFolderQuery includes folders and all four comic formats`() {
+    fun `buildFolderQuery scopes to the parent folder and excludes trashed files`() {
+        // Format filtering is no longer done server-side (Drive's `name contains 'X'` operator
+        // does prefix-word matching, not substring matching, so a clause like
+        // `name contains '.epub'` doesn't reliably match a real filename like "MyBook.epub") --
+        // parseDriveEntries now does extension-based filtering client-side instead, so the query
+        // itself no longer contains any format-specific substrings.
         val query = repo.buildFolderQuery("root")
         assertTrue(query.contains("'root' in parents"))
-        assertTrue(query.contains("application/vnd.google-apps.folder"))
-        assertTrue(query.contains(".pdf"))
-        assertTrue(query.contains(".cbz"))
-        assertTrue(query.contains(".epub"))
-        assertTrue(query.contains(".cbr"))
+        assertTrue(query.contains("trashed = false"))
     }
 
     @Test
@@ -105,5 +106,40 @@ class GoogleDriveRepositoryTest {
     fun `parseDriveEntries returns an empty list when the files array is absent`() {
         val entries = repo.parseDriveEntries("{}")
         assertTrue(entries.isEmpty())
+    }
+
+    @Test
+    fun `parseDriveEntries excludes a non-folder entry with an unrecognized extension instead of defaulting it to PDF`() {
+        val json = """
+            {
+              "files": [
+                { "id": "f1", "name": "notes.txt", "mimeType": "text/plain" },
+                { "id": "f2", "name": "comic.cbz", "mimeType": "application/zip" }
+              ]
+            }
+        """.trimIndent()
+
+        val entries = repo.parseDriveEntries(json).filterIsInstance<DriveEntry.ComicFile>()
+
+        assertEquals(1, entries.size)
+        assertEquals("comic.cbz", entries.single().comic.title)
+    }
+
+    @Test
+    fun `buildFolderListRequest appends a pageToken param only when one is supplied`() {
+        val withoutToken = repo.buildFolderListRequest("root", "test-token-123")
+        assertTrue(!withoutToken.url.toString().contains("pageToken"))
+        assertTrue(withoutToken.url.toString().contains("pageSize=1000"))
+        assertTrue(withoutToken.url.toString().contains("nextPageToken"))
+
+        val withToken = repo.buildFolderListRequest("root", "test-token-123", pageToken = "abc123")
+        assertTrue(withToken.url.toString().contains("pageToken=abc123"))
+    }
+
+    @Test
+    fun `extractNextPageToken returns the token when present and null otherwise`() {
+        assertEquals("token-xyz", repo.extractNextPageToken("""{"nextPageToken":"token-xyz","files":[]}"""))
+        assertEquals(null, repo.extractNextPageToken("""{"files":[]}"""))
+        assertEquals(null, repo.extractNextPageToken("""{"nextPageToken":"","files":[]}"""))
     }
 }
