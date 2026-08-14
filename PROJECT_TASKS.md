@@ -119,8 +119,8 @@ anything that assumes the app can read files on a real device.
 - [x] Manual QA pass on a physical device or emulator covering: local scan with real files, Drive folder with a real API key, all 4 reading modes, all 5 color filters — see verification note above; local scan/Drive/4 reading modes all confirmed working, but the color-filter pass surfaced a real gap (see follow-up below) rather than confirming all 5 filters are reachable
 - [ ] **Follow-up:** wire a color-filter picker into `ReaderScreen.kt`'s Quick Settings sheet (mirror `EpubReaderScreen.kt`'s existing `ColorFilterMode.entries.forEach { FilterChip(...) }` pattern) — `ColorFilterMode`/`setFilterMode`/the background-color `when` block already all exist and work, only the PDF/CBZ/CBR reader's picker UI is missing
 
-## Epic 9 — Release Prep ⬜
-- [ ] Finalize app icon/branding assets (depends on Epic 0's launcher icon task)
+## Epic 9 — Release Prep 🟨
+- [x] Finalize app icon/branding assets (depends on Epic 0's launcher icon task) — replaced Epic 0's placeholder with the real logo (`Logo-ComicAnything.png`, 1254x1254 source), resized to all 5 mipmap densities (mdpi 48px → xxxhdpi 192px) for both `ic_launcher.png` and `ic_launcher_round.png`. No adaptive icon (`mipmap-anydpi-v26`) exists in this project — legacy PNG-only setup, matching Epic 0's original approach. Verified rendering correctly on the home screen of `comicanything_playstore` (2026-08-14) — the OEM launcher's circular mask crops the corners slightly (expected for round-style launchers) but the logo stays clearly recognizable.
 - [ ] Decide versioning strategy (currently hardcoded `versionCode = 1`, `versionName = "1.0.0"` in `app/build.gradle.kts:14-15`)
 - [ ] Configure signed release build (keystore, signing config) — release build type currently has no signing config at all
 - [ ] Verify the README's "Build & Install" steps work end-to-end on a clean checkout
