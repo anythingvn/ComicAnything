@@ -7,9 +7,11 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import com.comicanything.reader.MainDispatcherRule
 import com.comicanything.reader.data.epub.EpubBook
+import com.comicanything.reader.data.model.ColorFilterMode
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
+import com.comicanything.reader.data.model.ReadingMode
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.LocalFileRepository
@@ -1072,5 +1074,121 @@ class ReaderViewModelTest {
         // evaluate it, which is what lets every existing PDF/CBZ test in this file keep
         // constructing ReaderViewModel without supplying a fake cbrCacheRoot at all.
         assertEquals(0, cbrCacheRootCallCount)
+    }
+
+    private fun buildCbz(pageCount: Int): File {
+        val zipFile = tempFolder.newFile("state-transition-${System.nanoTime()}.cbz")
+        java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zip ->
+            for (i in 1..pageCount) {
+                zip.putNextEntry(java.util.zip.ZipEntry("page$i.jpg"))
+                zip.write("fake-jpeg-bytes-$i".toByteArray())
+                zip.closeEntry()
+            }
+        }
+        return zipFile
+    }
+
+    @Test
+    fun `setPage clamps below 1 to page 1`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(3).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        val clamped = viewModel.setCurrentPageIndicator(-5)
+
+        assertEquals(1, clamped)
+        assertEquals(1, viewModel.uiState.value.currentPage)
+    }
+
+    @Test
+    fun `setPage clamps above totalPages to the last page`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(3).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        val clamped = viewModel.setCurrentPageIndicator(99)
+
+        assertEquals(3, clamped)
+        assertEquals(3, viewModel.uiState.value.currentPage)
+    }
+
+    @Test
+    fun `setPage accepts an in-range value unchanged`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(3).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        val clamped = viewModel.setCurrentPageIndicator(2)
+
+        assertEquals(2, clamped)
+        assertEquals(2, viewModel.uiState.value.currentPage)
+    }
+
+    @Test
+    fun `setCurrentPageIndicator updates the active comic's progress fields`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(4).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        viewModel.setCurrentPageIndicator(2)
+
+        assertEquals(2, comic.currentPage)
+        assertEquals(0.5f, comic.progressPercentage, 0.001f)
+    }
+
+    @Test
+    fun `setReadingMode updates readingMode for every mode`() {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+
+        for (mode in ReadingMode.entries) {
+            viewModel.setReadingMode(mode)
+            assertEquals(mode, viewModel.uiState.value.readingMode)
+        }
+    }
+
+    @Test
+    fun `setFilterMode updates filterMode for every mode`() {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+
+        for (mode in ColorFilterMode.entries) {
+            viewModel.setFilterMode(mode)
+            assertEquals(mode, viewModel.uiState.value.filterMode)
+        }
+    }
+
+    @Test
+    fun `toggleControls flips isControlsVisible each call`() {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        assertTrue(viewModel.uiState.value.isControlsVisible)
+
+        viewModel.toggleControls()
+        assertFalse(viewModel.uiState.value.isControlsVisible)
+
+        viewModel.toggleControls()
+        assertTrue(viewModel.uiState.value.isControlsVisible)
+    }
+
+    @Test
+    fun `toggleAutoCrop flips autoCropMargins each call`() {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        assertTrue(viewModel.uiState.value.autoCropMargins)
+
+        viewModel.toggleAutoCrop()
+        assertFalse(viewModel.uiState.value.autoCropMargins)
+
+        viewModel.toggleAutoCrop()
+        assertTrue(viewModel.uiState.value.autoCropMargins)
     }
 }
