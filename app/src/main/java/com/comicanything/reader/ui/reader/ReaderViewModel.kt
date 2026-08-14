@@ -23,6 +23,8 @@ import com.comicanything.reader.data.repository.DriveFileCache
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.ReaderSettings
+import com.comicanything.reader.data.repository.ReaderSettingsRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
 import com.comicanything.reader.data.repository.resolveComicFile
@@ -103,6 +105,12 @@ class ReaderViewModel @JvmOverloads constructor(
     // documented in ReaderViewModelTest. Wrapping it as a `() -> DriveFileCache` supplier, matching
     // the existing epubCacheRoot/cbrCacheRoot pattern, defers that construction to actual use.
     private val driveFileCache: () -> DriveFileCache = { DriveFileCache(File(application.filesDir, "drive_cache")) },
+    // Lazy supplier for the same reason as driveFileCache above: a plain
+    // `= ReaderSettingsRepository(application)` default would construct eagerly at every
+    // ReaderViewModel construction, touching Context.getApplicationContext() (throws "not
+    // mocked" in plain JVM unit tests) even for the ~50 existing test cases that never touch
+    // reader settings at all. Wrapping it as a supplier defers that construction to actual use.
+    private val settingsRepo: () -> ReaderSettingsRepository = { ReaderSettingsRepository(application) },
     // Backing state for the token-push mechanism (see [updateDriveAccessToken]), boxed in an
     // AtomicReference rather than exposed as a plain `var` property. A plain
     // `private var pushedDriveAccessToken: String? = null` constructor parameter was tried first,
@@ -651,14 +659,41 @@ class ReaderViewModel @JvmOverloads constructor(
 
     fun setReadingMode(mode: ReadingMode) {
         _uiState.value = _uiState.value.copy(readingMode = mode)
+        persistReaderSettings()
     }
 
     fun setFilterMode(mode: ColorFilterMode) {
         _uiState.value = _uiState.value.copy(filterMode = mode)
+        persistReaderSettings()
     }
 
     fun toggleAutoCrop() {
         _uiState.value = _uiState.value.copy(autoCropMargins = !_uiState.value.autoCropMargins)
+        persistReaderSettings()
+    }
+
+    /**
+     * Loads the persisted Quick Settings (reading mode, color filter, auto-crop) and applies
+     * them to state. Called once from MainActivity.onResume() -- these are simple global
+     * preferences, not permission- or connection-gated, so a single load per app foreground is
+     * enough (no need to re-check like Drive's connection state does).
+     */
+    fun loadReaderSettings() {
+        viewModelScope.launch {
+            val settings = settingsRepo().get()
+            _uiState.value = _uiState.value.copy(
+                readingMode = settings.readingMode,
+                filterMode = settings.filterMode,
+                autoCropMargins = settings.autoCropMargins
+            )
+        }
+    }
+
+    private fun persistReaderSettings() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            settingsRepo().save(ReaderSettings(state.readingMode, state.filterMode, state.autoCropMargins))
+        }
     }
 
     companion object {

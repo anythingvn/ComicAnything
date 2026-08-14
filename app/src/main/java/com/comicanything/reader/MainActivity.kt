@@ -76,6 +76,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Reading mode / color filter / auto-crop are simple global preferences that don't
+        // change from outside the app (unlike Drive's connection state), so loading them once
+        // here is enough -- no need to repeat this on every onResume().
+        viewModel.loadReaderSettings()
         setContent {
             ComicAnythingTheme {
                 Surface(

@@ -18,6 +18,7 @@ import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.ReaderSettingsRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
 import kotlinx.coroutines.Dispatchers
@@ -1497,5 +1498,43 @@ class ReaderViewModelTest {
 
         viewModel.toggleAutoCrop()
         assertTrue(viewModel.uiState.value.autoCropMargins)
+    }
+
+    @Test
+    fun `setReadingMode, setFilterMode, and toggleAutoCrop persist and are restored by loadReaderSettings`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val settingsDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "test-settings-${System.nanoTime()}.preferences_pb") }
+        )
+        val settingsRepo = ReaderSettingsRepository(settingsDataStore, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            settingsRepo = { settingsRepo }
+        )
+
+        viewModel.setReadingMode(ReadingMode.WEBTOON)
+        viewModel.setFilterMode(ColorFilterMode.SEPIA)
+        viewModel.toggleAutoCrop()
+        advanceUntilIdle()
+
+        // A fresh ViewModel (simulating an app restart) with the SAME underlying settingsRepo
+        // should pick up exactly what the first instance persisted, not the built-in defaults.
+        val restartedViewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            settingsRepo = { settingsRepo }
+        )
+        restartedViewModel.loadReaderSettings()
+        advanceUntilIdle()
+
+        assertEquals(ReadingMode.WEBTOON, restartedViewModel.uiState.value.readingMode)
+        assertEquals(ColorFilterMode.SEPIA, restartedViewModel.uiState.value.filterMode)
+        assertFalse(restartedViewModel.uiState.value.autoCropMargins)
     }
 }
