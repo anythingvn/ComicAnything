@@ -18,10 +18,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -47,6 +47,8 @@ import com.comicanything.reader.ui.reader.CoverLoadState
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
 import kotlin.math.roundToInt
+
+private const val MAX_CONTINUE_READING_COMICS = 10
 
 internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>): List<ComicItem> {
     val trimmedQuery = query.trim()
@@ -107,7 +109,11 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsState()
     var driveUrlInput by remember { mutableStateOf("") }
 
-    val filteredLibraryComics = state.libraryComics.filtered(homeScreenState.searchQuery, homeScreenState.selectedFormats)
+    val recentlyReadComics = state.libraryComics
+        .filter { it.currentPage > 1 || (it.format == ComicFormat.EPUB && it.progressPercentage > 0f) }
+        .filtered(homeScreenState.searchQuery, homeScreenState.selectedFormats)
+        .sortedByDescending { it.lastReadTimestamp }
+        .take(MAX_CONTINUE_READING_COMICS)
 
     Scaffold(
         topBar = {
@@ -164,8 +170,8 @@ fun HomeScreen(
                 containerColor = MaterialTheme.colorScheme.surface
             ) {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.CollectionsBookmark, contentDescription = null) },
-                    label = { Text("Library") },
+                    icon = { Icon(Icons.Default.History, contentDescription = null) },
+                    label = { Text("Continue Reading") },
                     selected = homeScreenState.selectedTab == 0,
                     onClick = { homeScreenState.selectedTab = 0 }
                 )
@@ -191,10 +197,10 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             when (homeScreenState.selectedTab) {
-                0 -> LibraryContent(
+                0 -> ContinueReadingContent(
                     state = state,
                     viewModel = viewModel,
-                    comics = filteredLibraryComics,
+                    comics = recentlyReadComics,
                     selectedFormats = homeScreenState.selectedFormats,
                     onFormatToggle = { format ->
                         homeScreenState.selectedFormats = if (format in homeScreenState.selectedFormats) homeScreenState.selectedFormats - format else homeScreenState.selectedFormats + format
@@ -300,7 +306,7 @@ fun ComicCoverThumbnail(
 }
 
 @Composable
-fun LibraryContent(
+fun ContinueReadingContent(
     state: ReaderUiState,
     viewModel: ReaderViewModel,
     comics: List<ComicItem>,
@@ -323,8 +329,6 @@ fun LibraryContent(
         return
     }
 
-    val inProgress = comics.filter { it.currentPage > 1 || (it.format == ComicFormat.EPUB && it.progressPercentage > 0f) }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -332,105 +336,147 @@ fun LibraryContent(
     ) {
         FormatFilterRow(selectedFormats = selectedFormats, onFormatToggle = onFormatToggle, isGridLayout = isGridLayout, onToggleLayout = onToggleLayout)
 
-        if (inProgress.isNotEmpty()) {
-            Text(
-                text = "⚡ CONTINUE READING",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(bottom = 20.dp)
-            ) {
-                items(inProgress) { comic ->
-                    Card(
-                        modifier = Modifier
-                            .width(140.dp)
-                            .height(180.dp)
-                            .clickable { onOpenComic(comic) },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                                    .background(Color(0xFF2C2C2C)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                ComicCoverThumbnail(
-                                    comic = comic,
-                                    viewModel = viewModel,
-                                    modifier = Modifier.fillMaxSize(),
-                                    iconSize = 48.dp,
-                                    iconTint = Color.White.copy(alpha = 0.5f)
-                                )
-                            }
-                            Column(modifier = Modifier.padding(8.dp)) {
-                                Text(
-                                    text = comic.title,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = Color.White
-                                )
-                                LinearProgressIndicator(
-                                    progress = comic.progressPercentage,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = if (comic.format == ComicFormat.EPUB) {
-                                        "${(comic.progressPercentage * 100).roundToInt()}%"
-                                    } else {
-                                        "Page ${comic.currentPage}/${comic.totalPages}"
-                                    },
-                                    fontSize = 10.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                        }
+        when {
+            comics.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "No reading history yet.\nOpen a comic from Local Files or Google Drive to see it here.",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(32.dp)
+                    )
+                }
+            }
+            isGridLayout -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(comics) { comic ->
+                        ContinueReadingGridCard(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(comics) { comic ->
+                        ContinueReadingListRow(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
                     }
                 }
             }
         }
+    }
+}
 
-        Text(
-            text = "📚 MY BOOKSHELF",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        if (isGridLayout) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
+@Composable
+private fun ContinueReadingGridCard(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .height(220.dp)
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E2638)),
+                contentAlignment = Alignment.Center
             ) {
-                items(comics) { comic ->
-                    ComicGridCard(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
-                }
+                ComicCoverThumbnail(
+                    comic = comic,
+                    viewModel = viewModel,
+                    modifier = Modifier.fillMaxSize(),
+                    iconSize = 64.dp,
+                    iconTint = Color.White.copy(alpha = 0.3f)
+                )
             }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(comics) { comic ->
-                    ComicListRow(comic = comic, viewModel = viewModel, onClick = { onOpenComic(comic) })
-                }
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    text = comic.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = Color.White
+                )
+                LinearProgressIndicator(
+                    progress = comic.progressPercentage,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = if (comic.format == ComicFormat.EPUB) {
+                        "${(comic.progressPercentage * 100).roundToInt()}%"
+                    } else {
+                        "Page ${comic.currentPage}/${comic.totalPages}"
+                    },
+                    fontSize = 10.sp,
+                    color = Color.Gray
+                )
             }
         }
     }
+}
+
+@Composable
+private fun ContinueReadingListRow(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = {
+            Text(
+                text = comic.title,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        supportingContent = {
+            Column {
+                LinearProgressIndicator(
+                    progress = comic.progressPercentage,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = if (comic.format == ComicFormat.EPUB) {
+                        "${(comic.progressPercentage * 100).roundToInt()}%"
+                    } else {
+                        "Page ${comic.currentPage}/${comic.totalPages}"
+                    },
+                    fontSize = 10.sp,
+                    color = Color.Gray
+                )
+            }
+        },
+        leadingContent = {
+            ComicCoverThumbnail(
+                comic = comic,
+                viewModel = viewModel,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                iconSize = 20.dp,
+                iconTint = MaterialTheme.colorScheme.primary
+            )
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .background(MaterialTheme.colorScheme.surface)
+    )
 }
 
 @Composable
@@ -466,103 +512,6 @@ fun FormatFilterRow(
             )
         }
     }
-}
-
-@Composable
-fun ComicGridCard(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .height(200.dp)
-            .clickable { onClick() },
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(Color(0xFF1E2638)),
-                contentAlignment = Alignment.Center
-            ) {
-                ComicCoverThumbnail(
-                    comic = comic,
-                    viewModel = viewModel,
-                    modifier = Modifier.fillMaxSize(),
-                    iconSize = 64.dp,
-                    iconTint = Color.White.copy(alpha = 0.3f)
-                )
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp),
-                    shape = RoundedCornerShape(4.dp),
-                    color = Color.Black.copy(alpha = 0.8f)
-                ) {
-                    Text(
-                        text = comic.format.name,
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-            Text(
-                text = comic.title,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                color = Color.White,
-                modifier = Modifier.padding(8.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun ComicListRow(comic: ComicItem, viewModel: ReaderViewModel, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = {
-            Text(
-                text = comic.title,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        leadingContent = {
-            ComicCoverThumbnail(
-                comic = comic,
-                viewModel = viewModel,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                iconSize = 20.dp,
-                iconTint = MaterialTheme.colorScheme.primary
-            )
-        },
-        trailingContent = {
-            Surface(
-                shape = RoundedCornerShape(4.dp),
-                color = Color.Black.copy(alpha = 0.8f)
-            ) {
-                Text(
-                    text = comic.format.name,
-                    color = MaterialTheme.colorScheme.secondary,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                )
-            }
-        },
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .background(MaterialTheme.colorScheme.surface)
-    )
 }
 
 @Composable

@@ -97,12 +97,24 @@ class MainActivity : ComponentActivity() {
                         activeComic.format == ComicFormat.EPUB -> EpubReaderScreen(
                             comic = activeComic,
                             viewModel = viewModel,
-                            onBack = { viewModel.closeComic() }
+                            onBack = {
+                                viewModel.closeComic()
+                                // libraryComics is a separately-scanned list (see
+                                // LocalFileRepository.scanStorageDirectories vs listDirectory) --
+                                // opening a comic from Local Files' folder browser mutates a
+                                // DIFFERENT ComicItem instance than the one sitting in
+                                // libraryComics, so the just-persisted progress never becomes
+                                // visible to the Continue Reading tab without an explicit refresh.
+                                viewModel.refreshLibrary()
+                            }
                         )
                         else -> ReaderScreen(
                             comic = activeComic,
                             viewModel = viewModel,
-                            onBack = { viewModel.closeComic() }
+                            onBack = {
+                                viewModel.closeComic()
+                                viewModel.refreshLibrary()
+                            }
                         )
                     }
                 }
