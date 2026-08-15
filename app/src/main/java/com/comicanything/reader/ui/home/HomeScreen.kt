@@ -225,7 +225,7 @@ fun HomeScreen(
             ) {
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.History, contentDescription = null) },
-                    label = { Text("Continue Reading") },
+                    label = { Text("Recent") },
                     selected = homeScreenState.selectedTab == 0,
                     onClick = { homeScreenState.selectedTab = 0 }
                 )
@@ -428,7 +428,7 @@ fun ContinueReadingContent(
             comics.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "No reading history yet.\nOpen a comic from Local Files or Google Drive to see it here.",
+                        text = "No reading history yet.\nOpen a comic from Storage or Google Drive to see it here.",
                         color = Color.Gray,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
