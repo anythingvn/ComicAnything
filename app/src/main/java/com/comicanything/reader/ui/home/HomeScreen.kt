@@ -36,6 +36,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -142,7 +145,7 @@ fun HomeScreen(
                 delay(400)
                 viewModel.searchDriveTree(homeScreenState.searchQuery)
             }
-            2 -> if (homeScreenState.searchQuery.isBlank()) {
+            3 -> if (homeScreenState.searchQuery.isBlank()) {
                 viewModel.clearLocalSearch()
             } else {
                 delay(400)
@@ -224,10 +227,16 @@ fun HomeScreen(
                     onClick = { homeScreenState.selectedTab = 1 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Folder, contentDescription = null) },
-                    label = { Text("Local Files") },
+                    icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    label = { Text("Jump to Folder") },
                     selected = homeScreenState.selectedTab == 2,
                     onClick = { homeScreenState.selectedTab = 2 }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                    label = { Text("Storage") },
+                    selected = homeScreenState.selectedTab == 3,
+                    onClick = { homeScreenState.selectedTab = 3 }
                 )
             }
         }
@@ -259,9 +268,6 @@ fun HomeScreen(
                     isSearchingTree = state.isSearchingDriveTree,
                     searchError = state.driveSearchError,
                     onRetrySearch = { viewModel.searchDriveTree(homeScreenState.searchQuery) },
-                    input = driveUrlInput,
-                    onInputChange = { driveUrlInput = it },
-                    onFetchLink = { viewModel.navigateToLinkedFolder(driveUrlInput) },
                     onNavigateFolder = { id, name -> viewModel.navigateDriveFolder(id, name) },
                     onNavigateUp = { index -> viewModel.navigateDriveUp(index) },
                     onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateDriveToBreadcrumbs(breadcrumbs) },
@@ -271,7 +277,18 @@ fun HomeScreen(
                     onDisconnectDrive = onDisconnectDrive,
                     onSwitchDriveAccount = onSwitchDriveAccount
                 )
-                2 -> LocalFilesContent(
+                2 -> JumpToFolderContent(
+                    state = state,
+                    input = driveUrlInput,
+                    onInputChange = { driveUrlInput = it },
+                    onFetchLink = {
+                        viewModel.navigateToLinkedFolder(driveUrlInput)
+                        driveUrlInput = ""
+                        homeScreenState.selectedTab = 1
+                    },
+                    onConnectDrive = onConnectDrive
+                )
+                3 -> LocalFilesContent(
                     state = state,
                     entries = state.localEntries,
                     searchResults = state.localSearchResults,
@@ -572,9 +589,6 @@ fun DriveContent(
     isSearchingTree: Boolean,
     searchError: String?,
     onRetrySearch: () -> Unit,
-    input: String,
-    onInputChange: (String) -> Unit,
-    onFetchLink: () -> Unit,
     onNavigateFolder: (String, String) -> Unit,
     onNavigateUp: (Int) -> Unit,
     onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
@@ -667,21 +681,6 @@ fun DriveContent(
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = input,
-            onValueChange = onInputChange,
-            label = { Text("Jump to folder (paste a Drive folder URL/ID)") },
-            trailingIcon = {
-                IconButton(onClick = onFetchLink) {
-                    Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -818,6 +817,67 @@ fun DriveContent(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun JumpToFolderContent(
+    state: ReaderUiState,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onFetchLink: () -> Unit,
+    onConnectDrive: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Jump to a Drive folder",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Paste a shared Google Drive folder link or ID to open it directly, without navigating there by hand.",
+            color = Color.Gray,
+            fontSize = 13.sp
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+
+        if (!state.isDriveConnected) {
+            Box(modifier = Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Connect your Google Drive first.",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = onConnectDrive) {
+                        Text("Connect")
+                    }
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputChange,
+                label = { Text("Drive folder URL or ID") },
+                trailingIcon = {
+                    IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
+                        Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { if (input.isNotBlank()) onFetchLink() }),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
         }
     }
 }
