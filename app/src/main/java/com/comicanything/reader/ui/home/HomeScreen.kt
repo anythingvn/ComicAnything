@@ -43,11 +43,15 @@ import androidx.compose.ui.unit.sp
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.repository.DriveEntry
+import com.comicanything.reader.data.repository.DriveSearchHit
 import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.ui.reader.CoverLoadState
+import com.comicanything.reader.ui.reader.DriveBreadcrumb
+import com.comicanything.reader.ui.reader.LocalBreadcrumb
 import com.comicanything.reader.ui.reader.ReaderUiState
 import com.comicanything.reader.ui.reader.ReaderViewModel
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private const val MAX_CONTINUE_READING_COMICS = 10
@@ -61,31 +65,43 @@ internal fun List<ComicItem>.filtered(query: String, formats: Set<ComicFormat>):
 }
 
 /**
- * Filters a folder-browse listing by [query], keeping every folder visible regardless of match
- * (so a search never blocks navigation into a folder that might contain matching files further
- * down) and only filtering the comic files by title.
+ * The folder path to show under a local search hit's name: the segment(s) between the search
+ * root and the entry's own containing folder, joined with " / ". Null when the entry sits
+ * directly in the search root (nothing useful to show).
  */
-internal fun List<DriveEntry>.filteredDriveEntries(query: String): List<DriveEntry> {
-    val trimmedQuery = query.trim()
-    if (trimmedQuery.isEmpty()) return this
-    return filter { entry ->
-        when (entry) {
-            is DriveEntry.Folder -> true
-            is DriveEntry.ComicFile -> entry.comic.title.contains(trimmedQuery, ignoreCase = true)
-        }
+internal fun localDisplayPath(rootPath: String, entryPath: String): String? {
+    // Plain string splitting on '/' rather than java.io.File: Android paths are always
+    // forward-slash absolute paths, and File's path resolution is platform-dependent -- on a
+    // Windows dev/test machine, File("/root/book.cbz") resolves against the current drive
+    // instead of treating "/root" literally, which would make this behave differently in tests
+    // than it does on-device.
+    val parent = entryPath.substringBeforeLast('/', missingDelimiterValue = "")
+    val relative = parent.removePrefix(rootPath).trim('/')
+    return relative.ifEmpty { null }?.replace("/", " / ")
+}
+
+/**
+ * Builds the full breadcrumb trail to navigate directly into [folderPath], by appending one
+ * breadcrumb per path segment between [rootPath] (the search root, already the last entry in
+ * [base]) and [folderPath] onto [base].
+ */
+internal fun localBreadcrumbsForFolder(base: List<LocalBreadcrumb>, rootPath: String, folderPath: String): List<LocalBreadcrumb> {
+    val relative = folderPath.removePrefix(rootPath).trim('/')
+    if (relative.isEmpty()) return base
+    var cumulative = rootPath
+    return base + relative.split("/").map { segment ->
+        cumulative = "$cumulative/$segment"
+        LocalBreadcrumb(cumulative, segment)
     }
 }
 
-internal fun List<LocalEntry>.filteredLocalEntries(query: String): List<LocalEntry> {
-    val trimmedQuery = query.trim()
-    if (trimmedQuery.isEmpty()) return this
-    return filter { entry ->
-        when (entry) {
-            is LocalEntry.Folder -> true
-            is LocalEntry.ComicFile -> entry.comic.title.contains(trimmedQuery, ignoreCase = true)
-        }
-    }
-}
+/**
+ * Builds the full breadcrumb trail to navigate directly into a Drive folder search hit, by
+ * appending [hit]'s recorded parent path (the folders between the search root and the hit) plus
+ * [folder] itself onto [base].
+ */
+internal fun driveBreadcrumbsForHit(base: List<DriveBreadcrumb>, hit: DriveSearchHit, folder: DriveEntry.Folder): List<DriveBreadcrumb> =
+    base + hit.parentPath.map { DriveBreadcrumb(it.id, it.name) } + DriveBreadcrumb(folder.id, folder.name)
 
 class HomeScreenState {
     var selectedTab by mutableIntStateOf(0)
@@ -111,6 +127,29 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var driveUrlInput by remember { mutableStateOf("") }
+
+    // Debounces the recursive Drive/Local tree search behind the query field: a live search call
+    // per keystroke would hammer the Drive API (a network round trip per folder visited) and
+    // re-walk a potentially large local filesystem tree needlessly often. Keying on
+    // (searchQuery, selectedTab) means Compose cancels and restarts this delay whenever either
+    // changes, which is exactly the debounce -- only the LAST keystroke within the delay window
+    // actually triggers a search.
+    LaunchedEffect(homeScreenState.searchQuery, homeScreenState.selectedTab) {
+        when (homeScreenState.selectedTab) {
+            1 -> if (homeScreenState.searchQuery.isBlank()) {
+                viewModel.clearDriveSearch()
+            } else {
+                delay(400)
+                viewModel.searchDriveTree(homeScreenState.searchQuery)
+            }
+            2 -> if (homeScreenState.searchQuery.isBlank()) {
+                viewModel.clearLocalSearch()
+            } else {
+                delay(400)
+                viewModel.searchLocalTree(homeScreenState.searchQuery)
+            }
+        }
+    }
 
     val recentlyReadComics = state.libraryComics
         .filter { it.currentPage > 1 || (it.format == ComicFormat.EPUB && it.progressPercentage > 0f) }
@@ -215,12 +254,15 @@ fun HomeScreen(
                 )
                 1 -> DriveContent(
                     state = state,
-                    entries = state.driveEntries.filteredDriveEntries(homeScreenState.searchQuery),
+                    entries = state.driveEntries,
+                    searchResults = state.driveSearchResults,
+                    isSearchingTree = state.isSearchingDriveTree,
                     input = driveUrlInput,
                     onInputChange = { driveUrlInput = it },
                     onFetchLink = { viewModel.navigateToLinkedFolder(driveUrlInput) },
                     onNavigateFolder = { id, name -> viewModel.navigateDriveFolder(id, name) },
                     onNavigateUp = { index -> viewModel.navigateDriveUp(index) },
+                    onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateDriveToBreadcrumbs(breadcrumbs) },
                     onRetry = { viewModel.retryDriveFolder() },
                     onOpenComic = onOpenComic,
                     onConnectDrive = onConnectDrive,
@@ -229,10 +271,12 @@ fun HomeScreen(
                 )
                 2 -> LocalFilesContent(
                     state = state,
-                    entries = state.localEntries.filteredLocalEntries(homeScreenState.searchQuery),
-                    isSearching = homeScreenState.searchQuery.isNotBlank(),
+                    entries = state.localEntries,
+                    searchResults = state.localSearchResults,
+                    isSearchingTree = state.isSearchingLocalTree,
                     onNavigateFolder = { path, name -> viewModel.navigateLocalFolder(path, name) },
                     onNavigateUp = { index -> viewModel.navigateLocalUp(index) },
+                    onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateLocalToBreadcrumbs(breadcrumbs) },
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )
@@ -522,11 +566,14 @@ fun FormatFilterRow(
 fun DriveContent(
     state: ReaderUiState,
     entries: List<DriveEntry>,
+    searchResults: List<DriveSearchHit>?,
+    isSearchingTree: Boolean,
     input: String,
     onInputChange: (String) -> Unit,
     onFetchLink: () -> Unit,
     onNavigateFolder: (String, String) -> Unit,
     onNavigateUp: (Int) -> Unit,
+    onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
     onRetry: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onConnectDrive: () -> Unit,
@@ -666,10 +713,54 @@ fun DriveContent(
                     }
                 }
             }
+            searchResults != null -> {
+                when {
+                    isSearchingTree -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                    searchResults.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No matches in this folder or its subfolders.",
+                            color = Color.Gray,
+                            fontSize = 14.sp
+                        )
+                    }
+                    else -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(1),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(searchResults) { hit ->
+                            val pathLabel = hit.parentPath.joinToString(" / ") { it.name }.ifEmpty { null }
+                            when (val entry = hit.entry) {
+                                is DriveEntry.Folder -> ListItem(
+                                    headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                                    supportingContent = pathLabel?.let { { Text(it, color = Color.Gray, fontSize = 12.sp) } },
+                                    leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { onNavigateToBreadcrumbs(driveBreadcrumbsForHit(state.driveBreadcrumbs, hit, entry)) }
+                                        .background(MaterialTheme.colorScheme.surface)
+                                )
+                                is DriveEntry.ComicFile -> ListItem(
+                                    headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
+                                    supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                                    leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                    trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { onOpenComic(entry.comic) }
+                                        .background(MaterialTheme.colorScheme.surface)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             entries.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = if (state.driveEntries.isEmpty()) "This folder is empty." else "No files match your search in this folder.",
+                        text = "This folder is empty.",
                         color = Color.Gray,
                         fontSize = 14.sp
                     )
@@ -713,9 +804,11 @@ fun DriveContent(
 fun LocalFilesContent(
     state: ReaderUiState,
     entries: List<LocalEntry>,
-    isSearching: Boolean,
+    searchResults: List<LocalEntry>?,
+    isSearchingTree: Boolean,
     onNavigateFolder: (String, String) -> Unit,
     onNavigateUp: (Int) -> Unit,
+    onNavigateToBreadcrumbs: (List<LocalBreadcrumb>) -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onRequestPermission: () -> Unit
 ) {
@@ -784,10 +877,66 @@ fun LocalFilesContent(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
+            searchResults != null -> {
+                val rootPath = state.localBreadcrumbs.lastOrNull()?.path
+                when {
+                    isSearchingTree -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                    searchResults.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No matches in this folder or its subfolders.",
+                            color = Color.Gray,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(32.dp)
+                        )
+                    }
+                    else -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(1),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(searchResults) { entry ->
+                            when (entry) {
+                                is LocalEntry.Folder -> {
+                                    val pathLabel = rootPath?.let { localDisplayPath(it, entry.path) }
+                                    ListItem(
+                                        headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                                        supportingContent = pathLabel?.let { { Text(it, color = Color.Gray, fontSize = 12.sp) } },
+                                        leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                        trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                if (rootPath != null) {
+                                                    onNavigateToBreadcrumbs(localBreadcrumbsForFolder(state.localBreadcrumbs, rootPath, entry.path))
+                                                }
+                                            }
+                                            .background(MaterialTheme.colorScheme.surface)
+                                    )
+                                }
+                                is LocalEntry.ComicFile -> {
+                                    val pathLabel = rootPath?.let { localDisplayPath(it, entry.comic.pathOrUrl) }
+                                    ListItem(
+                                        headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
+                                        supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                                        leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                        trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { onOpenComic(entry.comic) }
+                                            .background(MaterialTheme.colorScheme.surface)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             entries.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = if (isSearching) "No files match your search in this folder." else "This folder is empty.",
+                        text = "This folder is empty.",
                         color = Color.Gray,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,

@@ -62,6 +62,38 @@ class LocalFileRepository(
         folders + files
     }
 
+    /**
+     * Recursively searches [rootPath] and every folder beneath it (up to [MAX_SCAN_DEPTH]) for
+     * folders and comic files whose name contains [query]. A folder is matched by its own name
+     * regardless of whether anything inside it matches -- callers still descend into it via
+     * [listDirectory] the normal way, so a matched folder is a valid result on its own, not just
+     * a container. The search root itself is never included, matching the intuition that you're
+     * already "in" it.
+     */
+    suspend fun searchTree(rootPath: String, query: String): List<LocalEntry> = withContext(ioDispatcher) {
+        val trimmedQuery = query.trim()
+        if (trimmedQuery.isEmpty()) return@withContext emptyList()
+        val rootDir = File(rootPath)
+        if (!rootDir.exists() || !rootDir.isDirectory) return@withContext emptyList()
+
+        rootDir.walkTopDown()
+            .maxDepth(MAX_SCAN_DEPTH)
+            .filter { it != rootDir }
+            .mapNotNull { file ->
+                when {
+                    file.isDirectory && file.name.contains(trimmedQuery, ignoreCase = true) ->
+                        LocalEntry.Folder(file.absolutePath, file.name)
+                    file.isFile -> formatFor(file.name)?.let { format ->
+                        comicItemFor(file, format)
+                            .takeIf { it.title.contains(trimmedQuery, ignoreCase = true) }
+                            ?.let { LocalEntry.ComicFile(it) }
+                    }
+                    else -> null
+                }
+            }
+            .toList()
+    }
+
     private fun comicItemFor(file: File, format: ComicFormat) = ComicItem(
         id = file.absolutePath.hashCode().toString(),
         title = file.name,

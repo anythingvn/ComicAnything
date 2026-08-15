@@ -3,6 +3,7 @@ package com.comicanything.reader.data.repository
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -15,6 +16,9 @@ sealed interface DriveEntry {
     data class Folder(val id: String, val name: String) : DriveEntry
     data class ComicFile(val comic: ComicItem) : DriveEntry
 }
+
+/** A search match plus the chain of folders between the search root and this entry (exclusive of both). */
+data class DriveSearchHit(val entry: DriveEntry, val parentPath: List<DriveEntry.Folder>)
 
 class DriveApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
@@ -147,6 +151,47 @@ class GoogleDriveRepository {
         }
     }
 
+    /**
+     * Recursively searches every folder under [rootFolderId] (up to [maxDepth] levels below it)
+     * for folders and comic files whose name contains [query]. A folder that fails to load (e.g.
+     * a permission hiccup on one subfolder) is skipped rather than aborting the whole search --
+     * everything else already found, or reachable through a different branch, still comes back.
+     * [fetchFolder] defaults to [fetchFolderContents] but is overridable so tests can search a
+     * fake in-memory tree without touching the network.
+     */
+    suspend fun searchTree(
+        rootFolderId: String,
+        query: String,
+        accessToken: String,
+        maxDepth: Int = MAX_SEARCH_DEPTH,
+        fetchFolder: suspend (String, String) -> List<DriveEntry> = { folderId, token -> fetchFolderContents(folderId, token) }
+    ): List<DriveSearchHit> {
+        val trimmedQuery = query.trim()
+        if (trimmedQuery.isEmpty()) return emptyList()
+        val results = mutableListOf<DriveSearchHit>()
+
+        suspend fun walk(folderId: String, path: List<DriveEntry.Folder>, depth: Int) {
+            val children = try {
+                fetchFolder(folderId, accessToken)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return
+            }
+            for (child in children) {
+                val matches = when (child) {
+                    is DriveEntry.Folder -> child.name.contains(trimmedQuery, ignoreCase = true)
+                    is DriveEntry.ComicFile -> child.comic.title.contains(trimmedQuery, ignoreCase = true)
+                }
+                if (matches) results.add(DriveSearchHit(child, path))
+                if (child is DriveEntry.Folder && depth < maxDepth) walk(child.id, path + child, depth + 1)
+            }
+        }
+
+        walk(rootFolderId, emptyList(), 0)
+        return results
+    }
+
     internal fun buildDownloadRequest(fileId: String, accessToken: String): Request {
         return Request.Builder()
             .url("https://www.googleapis.com/drive/v3/files/$fileId?alt=media")
@@ -184,5 +229,9 @@ class GoogleDriveRepository {
             // covered before this change.
             throw DriveApiException("Couldn't reach Google Drive -- check your connection", e)
         }
+    }
+
+    companion object {
+        private const val MAX_SEARCH_DEPTH = 8
     }
 }

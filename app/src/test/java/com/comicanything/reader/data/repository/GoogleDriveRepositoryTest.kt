@@ -1,6 +1,9 @@
 package com.comicanything.reader.data.repository
 
 import com.comicanything.reader.data.model.ComicFormat
+import com.comicanything.reader.data.model.ComicItem
+import com.comicanything.reader.data.model.ComicSource
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -8,6 +11,22 @@ import org.junit.Test
 class GoogleDriveRepositoryTest {
 
     private val repo = GoogleDriveRepository()
+
+    private fun folder(id: String, name: String) = DriveEntry.Folder(id, name)
+
+    private fun file(id: String, title: String) = DriveEntry.ComicFile(
+        ComicItem(id = id, title = title, pathOrUrl = "https://example.com/$id", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.PDF)
+    )
+
+    /** Builds a fetchFolder fake from a fixed id->children map, tracking how many calls were made. */
+    private class FakeTree(private val tree: Map<String, List<DriveEntry>>) {
+        var callCount = 0
+            private set
+        val fetch: suspend (String, String) -> List<DriveEntry> = { folderId, _ ->
+            callCount++
+            tree[folderId] ?: emptyList()
+        }
+    }
 
     @Test
     fun `extractFolderId pulls the id out of a folder URL`() {
@@ -141,5 +160,89 @@ class GoogleDriveRepositoryTest {
         assertEquals("token-xyz", repo.extractNextPageToken("""{"nextPageToken":"token-xyz","files":[]}"""))
         assertEquals(null, repo.extractNextPageToken("""{"files":[]}"""))
         assertEquals(null, repo.extractNextPageToken("""{"nextPageToken":"","files":[]}"""))
+    }
+
+    @Test
+    fun `searchTree matches a file several folders below the search root and records its path`() = runTest {
+        val tree = FakeTree(
+            mapOf(
+                "root" to listOf(folder("f-truyen", "Truyen tranh")),
+                "f-truyen" to listOf(folder("f-001", "001 - Doi Bong")),
+                "f-001" to listOf(file("c-vol01", "vol01.pdf"))
+            )
+        )
+
+        val results = repo.searchTree("root", "vol01", "token", fetchFolder = tree.fetch)
+
+        val hit = results.single()
+        assertEquals("vol01.pdf", (hit.entry as DriveEntry.ComicFile).comic.title)
+        assertEquals(listOf(folder("f-truyen", "Truyen tranh"), folder("f-001", "001 - Doi Bong")), hit.parentPath)
+    }
+
+    @Test
+    fun `searchTree matches a folder by name without requiring its contents to match`() = runTest {
+        val tree = FakeTree(
+            mapOf(
+                "root" to listOf(folder("f-truyen", "Truyen tranh")),
+                "f-truyen" to listOf(folder("f-001", "001 - Doi Bong Thanh Dong"))
+            )
+        )
+
+        val results = repo.searchTree("root", "thanh dong", "token", fetchFolder = tree.fetch)
+
+        val hit = results.single()
+        assertEquals("001 - Doi Bong Thanh Dong", (hit.entry as DriveEntry.Folder).name)
+        assertEquals(listOf(folder("f-truyen", "Truyen tranh")), hit.parentPath)
+    }
+
+    @Test
+    fun `searchTree is case-insensitive and matches by substring`() = runTest {
+        val tree = FakeTree(mapOf("root" to listOf(file("c1", "Solo_Leveling.pdf"))))
+
+        val results = repo.searchTree("root", "leveling", "token", fetchFolder = tree.fetch)
+
+        assertEquals(1, results.size)
+    }
+
+    @Test
+    fun `searchTree does not descend past maxDepth`() = runTest {
+        val tree = FakeTree(
+            mapOf(
+                "root" to listOf(folder("f-1", "Level1")),
+                "f-1" to listOf(folder("f-2", "Level2")),
+                "f-2" to listOf(file("c1", "buried.pdf"))
+            )
+        )
+
+        val results = repo.searchTree("root", "buried", "token", maxDepth = 1, fetchFolder = tree.fetch)
+
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun `searchTree skips a folder that fails to load instead of aborting the whole search`() = runTest {
+        val tree = FakeTree(
+            mapOf(
+                "root" to listOf(folder("f-broken", "Broken"), folder("f-ok", "Ok")),
+                "f-ok" to listOf(file("c1", "target.pdf"))
+            )
+        )
+        val fetchWithFailure: suspend (String, String) -> List<DriveEntry> = { id, token ->
+            if (id == "f-broken") throw DriveApiException("nope") else tree.fetch(id, token)
+        }
+
+        val results = repo.searchTree("root", "target", "token", fetchFolder = fetchWithFailure)
+
+        assertEquals(1, results.size)
+    }
+
+    @Test
+    fun `searchTree with a blank query returns no results and makes no calls`() = runTest {
+        val tree = FakeTree(mapOf("root" to listOf(file("c1", "book.pdf"))))
+
+        val results = repo.searchTree("root", "   ", "token", fetchFolder = tree.fetch)
+
+        assertTrue(results.isEmpty())
+        assertEquals(0, tree.callCount)
     }
 }

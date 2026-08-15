@@ -20,6 +20,7 @@ import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.DriveFileCache
+import com.comicanything.reader.data.repository.DriveSearchHit
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
@@ -54,8 +55,15 @@ data class ReaderUiState(
     val driveEntries: List<DriveEntry> = emptyList(),
     val driveBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
     val driveError: String? = null,
+    // null = no recursive search active for this folder (show driveEntries normally); non-null
+    // (possibly empty) = a search is active and this is its result set, searched from the
+    // current folder down through its subfolders.
+    val driveSearchResults: List<DriveSearchHit>? = null,
+    val isSearchingDriveTree: Boolean = false,
     val localEntries: List<LocalEntry> = emptyList(),
     val localBreadcrumbs: List<LocalBreadcrumb> = emptyList(),
+    val localSearchResults: List<LocalEntry>? = null,
+    val isSearchingLocalTree: Boolean = false,
     val isLoadingLocalFolder: Boolean = false,
     val activeComic: ComicItem? = null,
     val currentPage: Int = 1,
@@ -157,7 +165,14 @@ class ReaderViewModel @JvmOverloads constructor(
                 resolveComicFile(comic, cacheProvider(), driveRepo::downloadFile, token)
             }
         },
-    private val fetchDriveFolderContents: suspend (String, String) -> List<DriveEntry> = driveRepo::fetchFolderContents
+    private val fetchDriveFolderContents: suspend (String, String) -> List<DriveEntry> = driveRepo::fetchFolderContents,
+    // A plain `driveRepo::searchTree` bound reference doesn't work here: searchTree's full
+    // signature carries two trailing parameters with defaults (maxDepth, fetchFolder), and Kotlin
+    // won't bind a method reference to a narrower functional type by dropping them. Wrapping in an
+    // explicit lambda sidesteps that -- the maxDepth/fetchFolder defaults still apply underneath.
+    private val searchDriveFolderTree: suspend (String, String, String) -> List<DriveSearchHit> =
+        { folderId, query, token -> driveRepo.searchTree(folderId, query, token) },
+    private val searchLocalFolderTree: suspend (String, String) -> List<LocalEntry> = localRepo::searchTree
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
@@ -166,6 +181,8 @@ class ReaderViewModel @JvmOverloads constructor(
     private var pageCache: PageBitmapCache? = null
     private var debounceJob: Job? = null
     private var epubExtractedDir: File? = null
+    private var driveSearchJob: Job? = null
+    private var localSearchJob: Job? = null
 
     /**
      * Tracks the coroutine currently performing an `openComic`/`openEpubComic` open, so that
@@ -279,6 +296,45 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Recursively searches the CURRENT Drive folder and everything beneath it for a folder or
+     * file name containing [query], replacing [ReaderUiState.driveSearchResults]. Superseding a
+     * still-in-flight search (the user kept typing) cancels the old one -- callers are expected
+     * to debounce keystrokes themselves before calling this, since a live Drive API call per
+     * keystroke would be wasteful and slow.
+     */
+    fun searchDriveTree(query: String) {
+        driveSearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.value = _uiState.value.copy(driveSearchResults = null, isSearchingDriveTree = false)
+            return
+        }
+        val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
+        driveSearchJob = viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSearchingDriveTree = true)
+            val token = driveAccessToken()
+            if (token == null) {
+                _uiState.value = _uiState.value.copy(isSearchingDriveTree = false, driveSearchResults = emptyList())
+                return@launch
+            }
+            val results = searchDriveFolderTree(current.folderId, trimmed, token)
+            _uiState.value = _uiState.value.copy(driveSearchResults = results, isSearchingDriveTree = false)
+        }
+    }
+
+    fun clearDriveSearch() {
+        driveSearchJob?.cancel()
+        _uiState.value = _uiState.value.copy(driveSearchResults = null, isSearchingDriveTree = false)
+    }
+
+    /** Jumps straight to a folder found via [searchDriveTree], replacing the breadcrumb trail. */
+    fun navigateDriveToBreadcrumbs(breadcrumbs: List<DriveBreadcrumb>) {
+        clearDriveSearch()
+        _uiState.value = _uiState.value.copy(driveBreadcrumbs = breadcrumbs)
+        fetchCurrentDriveFolder()
+    }
+
     fun navigateLocalFolder(path: String, name: String) {
         _uiState.value = _uiState.value.copy(
             localBreadcrumbs = _uiState.value.localBreadcrumbs + LocalBreadcrumb(path, name)
@@ -300,6 +356,39 @@ class ReaderViewModel @JvmOverloads constructor(
             val entries = localRepo.listDirectory(current.path)
             _uiState.value = _uiState.value.copy(localEntries = entries, isLoadingLocalFolder = false)
         }
+    }
+
+    /**
+     * Recursively searches the CURRENT local folder and everything beneath it for a folder or
+     * file name containing [query], replacing [ReaderUiState.localSearchResults]. See
+     * [searchDriveTree]'s doc for the debounce expectation -- a full recursive filesystem walk
+     * per keystroke would be wasteful on a large storage tree.
+     */
+    fun searchLocalTree(query: String) {
+        localSearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.value = _uiState.value.copy(localSearchResults = null, isSearchingLocalTree = false)
+            return
+        }
+        val current = _uiState.value.localBreadcrumbs.lastOrNull() ?: return
+        localSearchJob = viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSearchingLocalTree = true)
+            val results = searchLocalFolderTree(current.path, trimmed)
+            _uiState.value = _uiState.value.copy(localSearchResults = results, isSearchingLocalTree = false)
+        }
+    }
+
+    fun clearLocalSearch() {
+        localSearchJob?.cancel()
+        _uiState.value = _uiState.value.copy(localSearchResults = null, isSearchingLocalTree = false)
+    }
+
+    /** Jumps straight to a folder found via [searchLocalTree], replacing the breadcrumb trail. */
+    fun navigateLocalToBreadcrumbs(breadcrumbs: List<LocalBreadcrumb>) {
+        clearLocalSearch()
+        _uiState.value = _uiState.value.copy(localBreadcrumbs = breadcrumbs)
+        fetchCurrentLocalFolder()
     }
 
     /**

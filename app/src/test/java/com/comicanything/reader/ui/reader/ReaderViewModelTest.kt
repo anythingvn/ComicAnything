@@ -440,6 +440,90 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `searchDriveTree populates driveSearchResults from the current folder`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeHits = listOf(
+            com.comicanything.reader.data.repository.DriveSearchHit(
+                DriveEntry.Folder(id = "sub1", name = "Comics"),
+                parentPath = emptyList()
+            )
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() },
+            searchDriveFolderTree = { _, _, _ -> fakeHits }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        viewModel.searchDriveTree("com")
+        advanceUntilIdle()
+
+        assertEquals(fakeHits, viewModel.uiState.value.driveSearchResults)
+        assertFalse(viewModel.uiState.value.isSearchingDriveTree)
+    }
+
+    @Test
+    fun `searchDriveTree with a blank query clears any active search instead of running one`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var callCount = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() },
+            searchDriveFolderTree = { _, _, _ -> callCount++; emptyList() }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        viewModel.searchDriveTree("comics")
+        advanceUntilIdle()
+        assertEquals(1, callCount)
+
+        viewModel.searchDriveTree("")
+        advanceUntilIdle()
+
+        assertNull(viewModel.uiState.value.driveSearchResults)
+        assertEquals(1, callCount)
+    }
+
+    @Test
+    fun `navigateDriveToBreadcrumbs replaces the trail, fetches that folder, and clears the search`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub2", name = "Manga"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> fakeEntries },
+            searchDriveFolderTree = { _, _, _ -> listOf(com.comicanything.reader.data.repository.DriveSearchHit(DriveEntry.Folder("sub1", "Comics"), emptyList())) }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        viewModel.searchDriveTree("comics")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.driveSearchResults != null)
+
+        viewModel.navigateDriveToBreadcrumbs(listOf(DriveBreadcrumb("root", "My Drive"), DriveBreadcrumb("sub1", "Comics")))
+        advanceUntilIdle()
+
+        assertEquals(listOf("My Drive", "Comics"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
+        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
+        assertNull(viewModel.uiState.value.driveSearchResults)
+    }
+
+    @Test
     fun `navigateLocalFolder pushes a breadcrumb and lists the real directory's contents`() = runTest {
         val subfolder = tempFolder.newFolder("Comics")
         File(subfolder, "test.cbz").writeText("fake")
@@ -478,6 +562,61 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         assertEquals(listOf("Internal Storage", "Comics"), viewModel.uiState.value.localBreadcrumbs.map { it.name })
+    }
+
+    @Test
+    fun `searchLocalTree finds a real match several folders below the current one`() = runTest {
+        val nested = tempFolder.newFolder("Comics", "Manga")
+        File(nested, "solo_leveling.cbz").writeText("fake")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
+        advanceUntilIdle()
+
+        viewModel.searchLocalTree("leveling")
+        advanceUntilIdle()
+
+        val results = viewModel.uiState.value.localSearchResults
+        assertEquals(1, results?.size)
+        assertEquals("solo_leveling.cbz", (results!!.single() as LocalEntry.ComicFile).comic.title)
+        assertFalse(viewModel.uiState.value.isSearchingLocalTree)
+    }
+
+    @Test
+    fun `searchLocalTree with a blank query clears results instead of searching`() = runTest {
+        tempFolder.newFolder("Comics")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
+        advanceUntilIdle()
+        viewModel.searchLocalTree("comics")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.localSearchResults != null)
+
+        viewModel.searchLocalTree("   ")
+        advanceUntilIdle()
+
+        assertNull(viewModel.uiState.value.localSearchResults)
+    }
+
+    @Test
+    fun `navigateLocalToBreadcrumbs replaces the trail, lists that folder, and clears the search`() = runTest {
+        val comics = tempFolder.newFolder("Comics")
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
+        advanceUntilIdle()
+        viewModel.searchLocalTree("comics")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.localSearchResults != null)
+
+        viewModel.navigateLocalToBreadcrumbs(
+            listOf(LocalBreadcrumb(tempFolder.root.absolutePath, "Internal Storage"), LocalBreadcrumb(comics.absolutePath, "Comics"))
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("Internal Storage", "Comics"), viewModel.uiState.value.localBreadcrumbs.map { it.name })
+        assertNull(viewModel.uiState.value.localSearchResults)
     }
 
     @Test
