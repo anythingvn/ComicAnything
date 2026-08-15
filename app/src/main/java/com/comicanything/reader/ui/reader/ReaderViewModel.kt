@@ -609,7 +609,16 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     suspend fun loadPageBitmap(page: Int): PageLoadState {
-        val cache = pageCache ?: return PageLoadState.Failed
+        // pageCache is null both when no comic is open (Failed is correct -- nothing to show)
+        // and, transiently, while openComic() is still resolving the file and building the page
+        // source for a comic that IS open (activeComic already set). Treating that second case as
+        // Loading instead of Failed keeps every page item's placeholder at a uniform height
+        // (400dp) throughout the open sequence -- WebtoonReader's initial resume-to-page scroll
+        // depends on that: if some items flash to the smaller Failed placeholder before the real
+        // page source is ready, LazyColumn's "first visible item" drifts during that settling
+        // window (confirmed on-device: reopening a comic parked at page 3/4 landed on page 1).
+        val cache = pageCache
+            ?: return if (_uiState.value.activeComic != null) PageLoadState.Loading else PageLoadState.Failed
         return try {
             PageLoadState.Loaded(cache.getPage(page))
         } catch (e: PageDecodeException) {
