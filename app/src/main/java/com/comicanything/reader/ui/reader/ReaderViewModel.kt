@@ -64,6 +64,17 @@ data class ReaderUiState(
     // when it ran fine and simply found nothing -- those two cases must stay visibly different,
     // since silently reporting a failed search as "no matches" reads as the feature being broken.
     val driveSearchError: String? = null,
+    // A second, independent Drive browsing session for the "Jump to Folder" tab -- deliberately
+    // separate from driveBreadcrumbs/driveEntries above rather than sharing them, since jumping to
+    // a pasted folder there must not disturb wherever the user was browsing in the main Google
+    // Drive tab (and vice versa). Mirrors the drive* fields' shape and meaning field-for-field.
+    val jumpToBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
+    val jumpToEntries: List<DriveEntry> = emptyList(),
+    val jumpToError: String? = null,
+    val isLoadingJumpTo: Boolean = false,
+    val jumpToSearchResults: List<DriveSearchHit>? = null,
+    val isSearchingJumpToTree: Boolean = false,
+    val jumpToSearchError: String? = null,
     val localEntries: List<LocalEntry> = emptyList(),
     val localBreadcrumbs: List<LocalBreadcrumb> = emptyList(),
     val localSearchResults: List<LocalEntry>? = null,
@@ -187,6 +198,7 @@ class ReaderViewModel @JvmOverloads constructor(
     private var epubExtractedDir: File? = null
     private var driveSearchJob: Job? = null
     private var localSearchJob: Job? = null
+    private var jumpToSearchJob: Job? = null
 
     /**
      * Tracks the coroutine currently performing an `openComic`/`openEpubComic` open, so that
@@ -244,11 +256,6 @@ class ReaderViewModel @JvmOverloads constructor(
             }
             _uiState.value = _uiState.value.copy(libraryComics = merged, isScanningLocal = false)
         }
-    }
-
-    fun navigateToLinkedFolder(folderUrlOrId: String) {
-        val folderId = driveRepo.extractFolderId(folderUrlOrId)
-        navigateDriveFolder(folderId, name = folderId)
     }
 
     fun navigateDriveFolder(folderId: String, name: String) {
@@ -351,6 +358,112 @@ class ReaderViewModel @JvmOverloads constructor(
         clearDriveSearch()
         _uiState.value = _uiState.value.copy(driveBreadcrumbs = breadcrumbs)
         fetchCurrentDriveFolder()
+    }
+
+    // -- "Jump to Folder" tab: a second, independent Drive browsing session (see
+    // ReaderUiState.jumpToBreadcrumbs' doc comment). Each function below mirrors its drive*
+    // counterpart above field-for-field, operating on the jumpTo* state instead.
+
+    /**
+     * Starts a fresh browsing session at the pasted folder, discarding whatever breadcrumb trail
+     * was there before -- pasting a new link is a deliberate "start over here" action, unlike
+     * [navigateJumpToFolder] which descends from wherever the user already is.
+     */
+    fun navigateToLinkedFolderInJumpTab(folderUrlOrId: String) {
+        val folderId = driveRepo.extractFolderId(folderUrlOrId)
+        clearJumpToSearch()
+        _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = listOf(DriveBreadcrumb(folderId, folderId)))
+        fetchCurrentJumpToFolder()
+    }
+
+    fun navigateJumpToFolder(folderId: String, name: String) {
+        _uiState.value = _uiState.value.copy(
+            jumpToBreadcrumbs = _uiState.value.jumpToBreadcrumbs + DriveBreadcrumb(folderId, name)
+        )
+        fetchCurrentJumpToFolder()
+    }
+
+    fun navigateJumpToUp(toIndex: Int) {
+        val breadcrumbs = _uiState.value.jumpToBreadcrumbs
+        if (toIndex !in breadcrumbs.indices) return
+        _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = breadcrumbs.take(toIndex + 1))
+        fetchCurrentJumpToFolder()
+    }
+
+    fun retryJumpToFolder() {
+        fetchCurrentJumpToFolder()
+    }
+
+    private fun fetchCurrentJumpToFolder() {
+        val current = _uiState.value.jumpToBreadcrumbs.lastOrNull() ?: return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoadingJumpTo = true, jumpToError = null)
+            val token = driveAccessToken()
+            if (token == null) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingJumpTo = false,
+                    jumpToError = "Connect your Google Drive to browse it"
+                )
+                return@launch
+            }
+            try {
+                val entries = fetchDriveFolderContents(current.folderId, token)
+                _uiState.value = _uiState.value.copy(jumpToEntries = entries, isLoadingJumpTo = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingJumpTo = false,
+                    jumpToError = e.message ?: "Couldn't load this folder"
+                )
+            }
+        }
+    }
+
+    fun searchJumpToTree(query: String) {
+        jumpToSearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.value = _uiState.value.copy(jumpToSearchResults = null, jumpToSearchError = null, isSearchingJumpToTree = false)
+            return
+        }
+        val current = _uiState.value.jumpToBreadcrumbs.lastOrNull() ?: return
+        jumpToSearchJob = viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSearchingJumpToTree = true, jumpToSearchError = null)
+            val token = driveAccessToken()
+            if (token == null) {
+                _uiState.value = _uiState.value.copy(
+                    isSearchingJumpToTree = false,
+                    jumpToSearchResults = null,
+                    jumpToSearchError = "Not connected to Google Drive"
+                )
+                return@launch
+            }
+            try {
+                val results = searchDriveFolderTree(current.folderId, trimmed, token)
+                _uiState.value = _uiState.value.copy(jumpToSearchResults = results, isSearchingJumpToTree = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isSearchingJumpToTree = false,
+                    jumpToSearchResults = null,
+                    jumpToSearchError = e.message ?: "Search failed -- try again"
+                )
+            }
+        }
+    }
+
+    fun clearJumpToSearch() {
+        jumpToSearchJob?.cancel()
+        _uiState.value = _uiState.value.copy(jumpToSearchResults = null, jumpToSearchError = null, isSearchingJumpToTree = false)
+    }
+
+    /** Jumps straight to a folder found via [searchJumpToTree], replacing the breadcrumb trail. */
+    fun navigateJumpToBreadcrumbs(breadcrumbs: List<DriveBreadcrumb>) {
+        clearJumpToSearch()
+        _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = breadcrumbs)
+        fetchCurrentJumpToFolder()
     }
 
     fun navigateLocalFolder(path: String, name: String) {

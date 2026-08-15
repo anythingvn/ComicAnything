@@ -145,6 +145,12 @@ fun HomeScreen(
                 delay(400)
                 viewModel.searchDriveTree(homeScreenState.searchQuery)
             }
+            2 -> if (homeScreenState.searchQuery.isBlank()) {
+                viewModel.clearJumpToSearch()
+            } else {
+                delay(400)
+                viewModel.searchJumpToTree(homeScreenState.searchQuery)
+            }
             3 -> if (homeScreenState.searchQuery.isBlank()) {
                 viewModel.clearLocalSearch()
             } else {
@@ -281,12 +287,18 @@ fun HomeScreen(
                     state = state,
                     input = driveUrlInput,
                     onInputChange = { driveUrlInput = it },
-                    onFetchLink = {
-                        viewModel.navigateToLinkedFolder(driveUrlInput)
-                        driveUrlInput = ""
-                        homeScreenState.selectedTab = 1
-                    },
-                    onConnectDrive = onConnectDrive
+                    onFetchLink = { viewModel.navigateToLinkedFolderInJumpTab(driveUrlInput) },
+                    onConnectDrive = onConnectDrive,
+                    entries = state.jumpToEntries,
+                    searchResults = state.jumpToSearchResults,
+                    isSearchingTree = state.isSearchingJumpToTree,
+                    searchError = state.jumpToSearchError,
+                    onRetrySearch = { viewModel.searchJumpToTree(homeScreenState.searchQuery) },
+                    onNavigateFolder = { id, name -> viewModel.navigateJumpToFolder(id, name) },
+                    onNavigateUp = { index -> viewModel.navigateJumpToUp(index) },
+                    onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateJumpToBreadcrumbs(breadcrumbs) },
+                    onRetry = { viewModel.retryJumpToFolder() },
+                    onOpenComic = onOpenComic
                 )
                 3 -> LocalFilesContent(
                     state = state,
@@ -639,173 +651,176 @@ fun DriveContent(
             }
         }
 
-        if (state.isDriveConnected && state.driveBreadcrumbs.isNotEmpty()) {
-            BackHandler(enabled = state.driveBreadcrumbs.size > 1) {
-                onNavigateUp(state.driveBreadcrumbs.size - 2)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (state.isDriveConnected) {
+            DriveFolderBrowser(
+                breadcrumbs = state.driveBreadcrumbs,
+                entries = entries,
+                error = state.driveError,
+                isLoading = state.isLoadingDrive,
+                searchResults = searchResults,
+                isSearchingTree = isSearchingTree,
+                searchError = searchError,
+                emptyBreadcrumbsPrompt = "Loading My Drive...",
+                onNavigateFolder = onNavigateFolder,
+                onNavigateUp = onNavigateUp,
+                onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
+                onRetry = onRetry,
+                onRetrySearch = onRetrySearch,
+                onOpenComic = onOpenComic
+            )
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "Connect your Google Drive above to browse your files.",
+                    color = Color.Gray,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
             }
-            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+/**
+ * The breadcrumb trail + folder listing (or search results) shared by the Google Drive tab and
+ * the Jump to Folder tab -- each drives it from its own independent breadcrumb/entries state (see
+ * [ReaderUiState.jumpToBreadcrumbs]'s doc comment for why those stay separate), but the rendering
+ * itself is identical, so only one copy of it exists.
+ */
+@Composable
+private fun DriveFolderBrowser(
+    breadcrumbs: List<DriveBreadcrumb>,
+    entries: List<DriveEntry>,
+    error: String?,
+    isLoading: Boolean,
+    searchResults: List<DriveSearchHit>?,
+    isSearchingTree: Boolean,
+    searchError: String?,
+    emptyBreadcrumbsPrompt: String,
+    onNavigateFolder: (String, String) -> Unit,
+    onNavigateUp: (Int) -> Unit,
+    onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
+    onRetry: () -> Unit,
+    onRetrySearch: () -> Unit,
+    onOpenComic: (ComicItem) -> Unit
+) {
+    if (breadcrumbs.isNotEmpty()) {
+        BackHandler(enabled = breadcrumbs.size > 1) {
+            onNavigateUp(breadcrumbs.size - 2)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (breadcrumbs.size > 1) {
+                IconButton(
+                    onClick = { onNavigateUp(breadcrumbs.size - 2) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Up one folder",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (state.driveBreadcrumbs.size > 1) {
-                    IconButton(
-                        onClick = { onNavigateUp(state.driveBreadcrumbs.size - 2) },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Up one folder",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                breadcrumbs.forEachIndexed { index, crumb ->
+                    if (index > 0) {
+                        Text(" > ", color = Color.Gray, fontSize = 13.sp)
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    state.driveBreadcrumbs.forEachIndexed { index, crumb ->
-                        if (index > 0) {
-                            Text(" > ", color = Color.Gray, fontSize = 13.sp)
-                        }
-                        Text(
-                            text = crumb.name,
-                            color = if (index == state.driveBreadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
-                            fontSize = 13.sp,
-                            modifier = Modifier.clickable { onNavigateUp(index) }
-                        )
-                    }
+                    Text(
+                        text = crumb.name,
+                        color = if (index == breadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable { onNavigateUp(index) }
+                    )
                 }
             }
         }
-
         Spacer(modifier = Modifier.height(16.dp))
+    }
 
-        when {
-            state.isLoadingDrive -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
+    when {
+        isLoading -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
-            !state.isDriveConnected -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        }
+        error != null -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Connect your Google Drive above to browse your files.",
+                        text = error,
                         color = Color.Gray,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onRetry) {
+                        Text("Retry")
+                    }
                 }
             }
-            state.driveError != null -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        }
+        searchResults != null || searchError != null -> {
+            when {
+                isSearchingTree -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Searching this folder and its subfolders...", color = Color.Gray, fontSize = 13.sp)
+                    }
+                }
+                searchError != null -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = state.driveError,
+                            text = searchError,
                             color = Color.Gray,
                             fontSize = 14.sp,
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(onClick = onRetry) {
+                        TextButton(onClick = onRetrySearch) {
                             Text("Retry")
                         }
                     }
                 }
-            }
-            searchResults != null || searchError != null -> {
-                when {
-                    isSearchingTree -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Searching this folder and its subfolders...", color = Color.Gray, fontSize = 13.sp)
-                        }
-                    }
-                    searchError != null -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = searchError,
-                                color = Color.Gray,
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            TextButton(onClick = onRetrySearch) {
-                                Text("Retry")
-                            }
-                        }
-                    }
-                    searchResults.isNullOrEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "No matches in this folder or its subfolders.",
-                            color = Color.Gray,
-                            fontSize = 14.sp
-                        )
-                    }
-                    else -> LazyVerticalGrid(
-                        columns = GridCells.Fixed(1),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(searchResults) { hit ->
-                            val pathLabel = hit.parentPath.joinToString(" / ") { it.name }.ifEmpty { null }
-                            when (val entry = hit.entry) {
-                                is DriveEntry.Folder -> ListItem(
-                                    headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
-                                    supportingContent = pathLabel?.let { { Text(it, color = Color.Gray, fontSize = 12.sp) } },
-                                    leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { onNavigateToBreadcrumbs(driveBreadcrumbsForHit(state.driveBreadcrumbs, hit, entry)) }
-                                        .background(MaterialTheme.colorScheme.surface)
-                                )
-                                is DriveEntry.ComicFile -> ListItem(
-                                    headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
-                                    supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
-                                    leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                                    trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { onOpenComic(entry.comic) }
-                                        .background(MaterialTheme.colorScheme.surface)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            entries.isEmpty() -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                searchResults.isNullOrEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "This folder is empty.",
+                        text = "No matches in this folder or its subfolders.",
                         color = Color.Gray,
                         fontSize = 14.sp
                     )
                 }
-            }
-            else -> {
-                LazyVerticalGrid(
+                else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(1),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(entries) { entry ->
-                        when (entry) {
+                    items(searchResults) { hit ->
+                        val pathLabel = hit.parentPath.joinToString(" / ") { it.name }.ifEmpty { null }
+                        when (val entry = hit.entry) {
                             is DriveEntry.Folder -> ListItem(
                                 headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                                supportingContent = pathLabel?.let { { Text(it, color = Color.Gray, fontSize = 12.sp) } },
                                 leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                                 trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onNavigateFolder(entry.id, entry.name) }
+                                    .clickable { onNavigateToBreadcrumbs(driveBreadcrumbsForHit(breadcrumbs, hit, entry)) }
                                     .background(MaterialTheme.colorScheme.surface)
                             )
                             is DriveEntry.ComicFile -> ListItem(
                                 headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
-                                supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                                supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
                                 leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                                 trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
                                 modifier = Modifier
@@ -814,6 +829,55 @@ fun DriveContent(
                                     .background(MaterialTheme.colorScheme.surface)
                             )
                         }
+                    }
+                }
+            }
+        }
+        breadcrumbs.isEmpty() -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = emptyBreadcrumbsPrompt,
+                    color = Color.Gray,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        entries.isEmpty() -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "This folder is empty.",
+                    color = Color.Gray,
+                    fontSize = 14.sp
+                )
+            }
+        }
+        else -> {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(1),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(entries) { entry ->
+                    when (entry) {
+                        is DriveEntry.Folder -> ListItem(
+                            headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                            leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                            trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onNavigateFolder(entry.id, entry.name) }
+                                .background(MaterialTheme.colorScheme.surface)
+                        )
+                        is DriveEntry.ComicFile -> ListItem(
+                            headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
+                            supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                            leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                            trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onOpenComic(entry.comic) }
+                                .background(MaterialTheme.colorScheme.surface)
+                        )
                     }
                 }
             }
@@ -827,7 +891,17 @@ fun JumpToFolderContent(
     input: String,
     onInputChange: (String) -> Unit,
     onFetchLink: () -> Unit,
-    onConnectDrive: () -> Unit
+    onConnectDrive: () -> Unit,
+    entries: List<DriveEntry>,
+    searchResults: List<DriveSearchHit>?,
+    isSearchingTree: Boolean,
+    searchError: String?,
+    onRetrySearch: () -> Unit,
+    onNavigateFolder: (String, String) -> Unit,
+    onNavigateUp: (Int) -> Unit,
+    onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
+    onRetry: () -> Unit,
+    onOpenComic: (ComicItem) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -877,6 +951,23 @@ fun JumpToFolderContent(
                 keyboardActions = KeyboardActions(onGo = { if (input.isNotBlank()) onFetchLink() }),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            DriveFolderBrowser(
+                breadcrumbs = state.jumpToBreadcrumbs,
+                entries = entries,
+                error = state.jumpToError,
+                isLoading = state.isLoadingJumpTo,
+                searchResults = searchResults,
+                isSearchingTree = isSearchingTree,
+                searchError = searchError,
+                emptyBreadcrumbsPrompt = "Paste a Drive folder link above to browse it.",
+                onNavigateFolder = onNavigateFolder,
+                onNavigateUp = onNavigateUp,
+                onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
+                onRetry = onRetry,
+                onRetrySearch = onRetrySearch,
+                onOpenComic = onOpenComic
             )
         }
     }

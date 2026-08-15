@@ -571,6 +571,152 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `navigateToLinkedFolderInJumpTab starts a fresh single-folder trail and populates jumpToEntries`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> fakeEntries }
+        )
+
+        viewModel.navigateToLinkedFolderInJumpTab("https://drive.google.com/drive/folders/shared-id?usp=sharing")
+        advanceUntilIdle()
+
+        assertEquals(listOf("shared-id"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.folderId })
+        assertEquals(fakeEntries, viewModel.uiState.value.jumpToEntries)
+        assertNull(viewModel.uiState.value.jumpToError)
+        assertFalse(viewModel.uiState.value.isLoadingJumpTo)
+    }
+
+    @Test
+    fun `jump-to-folder browsing is independent from the main Google Drive tab's breadcrumbs and entries`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val driveEntries = listOf(DriveEntry.Folder(id = "d1", name = "MyDriveFolder"))
+        val jumpEntries = listOf(DriveEntry.Folder(id = "j1", name = "SharedFolder"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else jumpEntries }
+        )
+
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        viewModel.navigateToLinkedFolderInJumpTab("shared-id")
+        advanceUntilIdle()
+
+        assertEquals(listOf("My Drive"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
+        assertEquals(driveEntries, viewModel.uiState.value.driveEntries)
+        assertEquals(listOf("shared-id"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.folderId })
+        assertEquals(jumpEntries, viewModel.uiState.value.jumpToEntries)
+    }
+
+    @Test
+    fun `navigateJumpToFolder descends from wherever the jump tab already is, not from the main Drive tab`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val nestedEntries = listOf(DriveEntry.ComicFile(ComicItem(id = "c1", title = "vol1.cbz", pathOrUrl = "https://x/c1", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { folderId, _ -> if (folderId == "nested") nestedEntries else emptyList() }
+        )
+
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+        viewModel.navigateJumpToFolder("nested", "Nested")
+        advanceUntilIdle()
+
+        assertEquals(listOf("shared-root", "Nested"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.name })
+        assertEquals(nestedEntries, viewModel.uiState.value.jumpToEntries)
+        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
+    }
+
+    @Test
+    fun `searchJumpToTree populates jumpToSearchResults from the jump tab's own current folder`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeHits = listOf(com.comicanything.reader.data.repository.DriveSearchHit(DriveEntry.Folder("sub1", "Comics"), emptyList()))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() },
+            searchDriveFolderTree = { _, _, _ -> fakeHits }
+        )
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+
+        viewModel.searchJumpToTree("com")
+        advanceUntilIdle()
+
+        assertEquals(fakeHits, viewModel.uiState.value.jumpToSearchResults)
+        assertNull(viewModel.uiState.value.driveSearchResults)
+        assertFalse(viewModel.uiState.value.isSearchingJumpToTree)
+    }
+
+    @Test
+    fun `navigateJumpToBreadcrumbs replaces the jump tab's trail, fetches that folder, and clears its search`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val fakeEntries = listOf(DriveEntry.Folder(id = "sub2", name = "Manga"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> fakeEntries },
+            searchDriveFolderTree = { _, _, _ -> listOf(com.comicanything.reader.data.repository.DriveSearchHit(DriveEntry.Folder("sub1", "Comics"), emptyList())) }
+        )
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+        viewModel.searchJumpToTree("comics")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.jumpToSearchResults != null)
+
+        viewModel.navigateJumpToBreadcrumbs(listOf(DriveBreadcrumb("shared-root", "shared-root"), DriveBreadcrumb("sub1", "Comics")))
+        advanceUntilIdle()
+
+        assertEquals(listOf("shared-root", "Comics"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.name })
+        assertEquals(fakeEntries, viewModel.uiState.value.jumpToEntries)
+        assertNull(viewModel.uiState.value.jumpToSearchResults)
+    }
+
+    @Test
+    fun `navigateJumpToFolder without a connected token sets a not-connected jumpToError`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { null },
+            fetchDriveFolderContents = { _, _ -> emptyList() }
+        )
+
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+
+        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.jumpToError)
+        assertFalse(viewModel.uiState.value.isLoadingJumpTo)
+    }
+
+    @Test
     fun `navigateLocalFolder pushes a breadcrumb and lists the real directory's contents`() = runTest {
         val subfolder = tempFolder.newFolder("Comics")
         File(subfolder, "test.cbz").writeText("fake")
