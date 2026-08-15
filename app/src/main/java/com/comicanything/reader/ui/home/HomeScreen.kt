@@ -257,6 +257,8 @@ fun HomeScreen(
                     entries = state.driveEntries,
                     searchResults = state.driveSearchResults,
                     isSearchingTree = state.isSearchingDriveTree,
+                    searchError = state.driveSearchError,
+                    onRetrySearch = { viewModel.searchDriveTree(homeScreenState.searchQuery) },
                     input = driveUrlInput,
                     onInputChange = { driveUrlInput = it },
                     onFetchLink = { viewModel.navigateToLinkedFolder(driveUrlInput) },
@@ -568,6 +570,8 @@ fun DriveContent(
     entries: List<DriveEntry>,
     searchResults: List<DriveSearchHit>?,
     isSearchingTree: Boolean,
+    searchError: String?,
+    onRetrySearch: () -> Unit,
     input: String,
     onInputChange: (String) -> Unit,
     onFetchLink: () -> Unit,
@@ -713,12 +717,30 @@ fun DriveContent(
                     }
                 }
             }
-            searchResults != null -> {
+            searchResults != null || searchError != null -> {
                 when {
                     isSearchingTree -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Searching this folder and its subfolders...", color = Color.Gray, fontSize = 13.sp)
+                        }
                     }
-                    searchResults.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    searchError != null -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = searchError,
+                                color = Color.Gray,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(onClick = onRetrySearch) {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                    searchResults.isNullOrEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             text = "No matches in this folder or its subfolders.",
                             color = Color.Gray,

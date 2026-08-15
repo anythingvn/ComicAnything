@@ -496,6 +496,53 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `searchDriveTree surfaces a failed search as an error instead of reporting it as no matches`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() },
+            searchDriveFolderTree = { _, _, _ -> throw DriveApiException("token expired") }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        viewModel.searchDriveTree("comics")
+        advanceUntilIdle()
+
+        assertNull(viewModel.uiState.value.driveSearchResults)
+        assertEquals("token expired", viewModel.uiState.value.driveSearchError)
+        assertFalse(viewModel.uiState.value.isSearchingDriveTree)
+    }
+
+    @Test
+    fun `searchDriveTree with no access token surfaces an error instead of reporting it as no matches`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { null },
+            fetchDriveFolderContents = { _, _ -> emptyList() },
+            searchDriveFolderTree = { _, _, _ -> emptyList() }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+
+        viewModel.searchDriveTree("comics")
+        advanceUntilIdle()
+
+        assertNull(viewModel.uiState.value.driveSearchResults)
+        assertEquals("Not connected to Google Drive", viewModel.uiState.value.driveSearchError)
+    }
+
+    @Test
     fun `navigateDriveToBreadcrumbs replaces the trail, fetches that folder, and clears the search`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val fakeEntries = listOf(DriveEntry.Folder(id = "sub2", name = "Manga"))

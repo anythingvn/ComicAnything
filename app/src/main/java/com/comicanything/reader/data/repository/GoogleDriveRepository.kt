@@ -5,6 +5,11 @@ import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -153,9 +158,20 @@ class GoogleDriveRepository {
 
     /**
      * Recursively searches every folder under [rootFolderId] (up to [maxDepth] levels below it)
-     * for folders and comic files whose name contains [query]. A folder that fails to load (e.g.
-     * a permission hiccup on one subfolder) is skipped rather than aborting the whole search --
-     * everything else already found, or reachable through a different branch, still comes back.
+     * for folders and comic files whose name contains [query]. Sibling folders at each level are
+     * walked concurrently (one Drive API round trip per folder, otherwise fully sequential) --
+     * confirmed on-device that a real, moderately-wide comic-sharing folder tree walked
+     * sequentially could take upwards of a minute with no progress feedback beyond a spinner,
+     * indistinguishable from "broken" to a user who gives up waiting.
+     *
+     * A folder that fails to load below the root (e.g. a permission hiccup on one subfolder) is
+     * skipped rather than aborting the whole search -- everything else already found, or
+     * reachable through a different branch, still comes back. A failure loading [rootFolderId]
+     * itself is NOT swallowed the same way: that's the one call every search makes unconditionally,
+     * so its failure (an expired token, no connection) means the search never really ran at all --
+     * confirmed this was previously being reported back to the user identically to "searched
+     * everything, found nothing," which is misleading enough to read as the feature being broken.
+     *
      * [fetchFolder] defaults to [fetchFolderContents] but is overridable so tests can search a
      * fake in-memory tree without touching the network.
      */
@@ -165,10 +181,11 @@ class GoogleDriveRepository {
         accessToken: String,
         maxDepth: Int = MAX_SEARCH_DEPTH,
         fetchFolder: suspend (String, String) -> List<DriveEntry> = { folderId, token -> fetchFolderContents(folderId, token) }
-    ): List<DriveSearchHit> {
+    ): List<DriveSearchHit> = coroutineScope {
         val trimmedQuery = query.trim()
-        if (trimmedQuery.isEmpty()) return emptyList()
+        if (trimmedQuery.isEmpty()) return@coroutineScope emptyList()
         val results = mutableListOf<DriveSearchHit>()
+        val resultsMutex = Mutex()
 
         suspend fun walk(folderId: String, path: List<DriveEntry.Folder>, depth: Int) {
             val children = try {
@@ -176,20 +193,26 @@ class GoogleDriveRepository {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (depth == 0) throw e
                 return
             }
-            for (child in children) {
-                val matches = when (child) {
+            val hits = children.filter { child ->
+                when (child) {
                     is DriveEntry.Folder -> child.name.contains(trimmedQuery, ignoreCase = true)
                     is DriveEntry.ComicFile -> child.comic.title.contains(trimmedQuery, ignoreCase = true)
                 }
-                if (matches) results.add(DriveSearchHit(child, path))
-                if (child is DriveEntry.Folder && depth < maxDepth) walk(child.id, path + child, depth + 1)
+            }.map { DriveSearchHit(it, path) }
+            if (hits.isNotEmpty()) resultsMutex.withLock { results.addAll(hits) }
+
+            if (depth < maxDepth) {
+                children.filterIsInstance<DriveEntry.Folder>()
+                    .map { folder -> async { walk(folder.id, path + folder, depth + 1) } }
+                    .awaitAll()
             }
         }
 
         walk(rootFolderId, emptyList(), 0)
-        return results
+        results
     }
 
     internal fun buildDownloadRequest(fileId: String, accessToken: String): Request {

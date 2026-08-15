@@ -245,4 +245,40 @@ class GoogleDriveRepositoryTest {
         assertTrue(results.isEmpty())
         assertEquals(0, tree.callCount)
     }
+
+    @Test
+    fun `searchTree propagates a failure loading the search root itself, unlike a failure deeper in the tree`() = runTest {
+        var thrown: DriveApiException? = null
+        try {
+            repo.searchTree(
+                "root",
+                "anything",
+                "token",
+                fetchFolder = { _, _ -> throw DriveApiException("token expired") }
+            )
+        } catch (e: DriveApiException) {
+            thrown = e
+        }
+
+        // The root is the one call every search makes unconditionally -- its failure means the
+        // search never really ran, so it must surface as an error rather than as "found nothing"
+        // (the behavior a failure deeper in the tree still gets, per the test above).
+        assertEquals("token expired", thrown?.message)
+    }
+
+    @Test
+    fun `searchTree walks sibling folders concurrently but still finds every match across branches`() = runTest {
+        val tree = FakeTree(
+            mapOf(
+                "root" to listOf(folder("f-a", "Branch A"), folder("f-b", "Branch B"), folder("f-c", "Branch C")),
+                "f-a" to listOf(file("c-a", "match_a.pdf")),
+                "f-b" to listOf(file("c-b", "match_b.pdf")),
+                "f-c" to listOf(file("c-c", "nomatch.pdf"))
+            )
+        )
+
+        val results = repo.searchTree("root", "match_", "token", fetchFolder = tree.fetch)
+
+        assertEquals(setOf("match_a.pdf", "match_b.pdf"), results.map { (it.entry as DriveEntry.ComicFile).comic.title }.toSet())
+    }
 }

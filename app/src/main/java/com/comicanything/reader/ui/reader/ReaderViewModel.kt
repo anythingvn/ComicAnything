@@ -60,6 +60,10 @@ data class ReaderUiState(
     // current folder down through its subfolders.
     val driveSearchResults: List<DriveSearchHit>? = null,
     val isSearchingDriveTree: Boolean = false,
+    // Set when the search itself couldn't run (e.g. an expired token, no connection) rather than
+    // when it ran fine and simply found nothing -- those two cases must stay visibly different,
+    // since silently reporting a failed search as "no matches" reads as the feature being broken.
+    val driveSearchError: String? = null,
     val localEntries: List<LocalEntry> = emptyList(),
     val localBreadcrumbs: List<LocalBreadcrumb> = emptyList(),
     val localSearchResults: List<LocalEntry>? = null,
@@ -307,25 +311,39 @@ class ReaderViewModel @JvmOverloads constructor(
         driveSearchJob?.cancel()
         val trimmed = query.trim()
         if (trimmed.isEmpty()) {
-            _uiState.value = _uiState.value.copy(driveSearchResults = null, isSearchingDriveTree = false)
+            _uiState.value = _uiState.value.copy(driveSearchResults = null, driveSearchError = null, isSearchingDriveTree = false)
             return
         }
         val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
         driveSearchJob = viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSearchingDriveTree = true)
+            _uiState.value = _uiState.value.copy(isSearchingDriveTree = true, driveSearchError = null)
             val token = driveAccessToken()
             if (token == null) {
-                _uiState.value = _uiState.value.copy(isSearchingDriveTree = false, driveSearchResults = emptyList())
+                _uiState.value = _uiState.value.copy(
+                    isSearchingDriveTree = false,
+                    driveSearchResults = null,
+                    driveSearchError = "Not connected to Google Drive"
+                )
                 return@launch
             }
-            val results = searchDriveFolderTree(current.folderId, trimmed, token)
-            _uiState.value = _uiState.value.copy(driveSearchResults = results, isSearchingDriveTree = false)
+            try {
+                val results = searchDriveFolderTree(current.folderId, trimmed, token)
+                _uiState.value = _uiState.value.copy(driveSearchResults = results, isSearchingDriveTree = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isSearchingDriveTree = false,
+                    driveSearchResults = null,
+                    driveSearchError = e.message ?: "Search failed -- try again"
+                )
+            }
         }
     }
 
     fun clearDriveSearch() {
         driveSearchJob?.cancel()
-        _uiState.value = _uiState.value.copy(driveSearchResults = null, isSearchingDriveTree = false)
+        _uiState.value = _uiState.value.copy(driveSearchResults = null, driveSearchError = null, isSearchingDriveTree = false)
     }
 
     /** Jumps straight to a folder found via [searchDriveTree], replacing the breadcrumb trail. */
