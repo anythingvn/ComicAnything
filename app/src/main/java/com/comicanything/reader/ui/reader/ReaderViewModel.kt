@@ -28,6 +28,8 @@ import com.comicanything.reader.data.repository.ReaderSettings
 import com.comicanything.reader.data.repository.ReaderSettingsRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
+import com.comicanything.reader.data.repository.SavedDriveLink
+import com.comicanything.reader.data.repository.SavedDriveLinkRepository
 import com.comicanything.reader.data.repository.resolveComicFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -75,6 +77,11 @@ data class ReaderUiState(
     val jumpToSearchResults: List<DriveSearchHit>? = null,
     val isSearchingJumpToTree: Boolean = false,
     val jumpToSearchError: String? = null,
+    // Folders jumped to from the Jump to Folder tab, favorited or just recently used -- see
+    // SavedDriveLinkRepository's doc comment. Independent of jumpToBreadcrumbs/jumpToEntries
+    // (which track wherever the user currently is), this is the persisted list shown before any
+    // link has been pasted yet.
+    val savedDriveLinks: List<SavedDriveLink> = emptyList(),
     val localEntries: List<LocalEntry> = emptyList(),
     val localBreadcrumbs: List<LocalBreadcrumb> = emptyList(),
     val localSearchResults: List<LocalEntry>? = null,
@@ -124,6 +131,12 @@ class ReaderViewModel @JvmOverloads constructor(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application),
     private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application),
+    // Lazy supplier for the same reason as settingsRepo/driveFileCache below: a plain
+    // `= SavedDriveLinkRepository(application)` default would construct eagerly at every
+    // ReaderViewModel construction, touching Context.getApplicationContext() (throws "not mocked"
+    // in plain JVM unit tests) even for the ~70 existing test cases that never touch saved Drive
+    // links at all. Wrapping it as a supplier defers that construction to actual use.
+    private val savedDriveLinkRepo: () -> SavedDriveLinkRepository = { SavedDriveLinkRepository(application) },
     private val thumbnailDecoder: suspend (ComicItem) -> Bitmap? = ::decodeThumbnail,
     private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub,
     private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") },
@@ -374,6 +387,37 @@ class ReaderViewModel @JvmOverloads constructor(
         clearJumpToSearch()
         _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = listOf(DriveBreadcrumb(folderId, folderId)))
         fetchCurrentJumpToFolder()
+        // Recorded regardless of whether the fetch above ends up succeeding -- a saved link is
+        // fundamentally "a folder the user pasted," and a transient load failure right now
+        // shouldn't erase that from their recent list.
+        viewModelScope.launch {
+            val repo = savedDriveLinkRepo()
+            repo.recordUsed(folderId)
+            _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
+        }
+    }
+
+    fun loadSavedDriveLinks() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(savedDriveLinks = savedDriveLinkRepo().getAll())
+        }
+    }
+
+    /** Stars or un-stars [folderId], creating a saved entry for it first if it doesn't have one yet (e.g. favoriting a folder immediately after jumping to it). [customName] is only applied when non-null -- un-starring an entry doesn't clear its name. */
+    fun setJumpToFolderFavorite(folderId: String, isFavorite: Boolean, customName: String? = null) {
+        viewModelScope.launch {
+            val repo = savedDriveLinkRepo()
+            repo.setFavorite(folderId, isFavorite, customName)
+            _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
+        }
+    }
+
+    fun removeSavedDriveLink(folderId: String) {
+        viewModelScope.launch {
+            val repo = savedDriveLinkRepo()
+            repo.remove(folderId)
+            _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
+        }
     }
 
     fun navigateJumpToFolder(folderId: String, name: String) {

@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
         // change from outside the app (unlike Drive's connection state), so loading them once
         // here is enough -- no need to repeat this on every onResume().
         viewModel.loadReaderSettings()
+        viewModel.loadSavedDriveLinks()
         setContent {
             ComicAnythingTheme {
                 Surface(

@@ -21,6 +21,7 @@ import com.comicanything.reader.data.repository.LocalFileRepository
 import com.comicanything.reader.data.repository.ReaderSettingsRepository
 import com.comicanything.reader.data.repository.ReadingProgress
 import com.comicanything.reader.data.repository.ReadingProgressRepository
+import com.comicanything.reader.data.repository.SavedDriveLinkRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -58,6 +59,12 @@ class ReaderViewModelTest {
     // instance explicitly instead of relying on the default.
     private lateinit var connectionRepo: DriveConnectionRepository
 
+    // Same hazard as progressRepo/connectionRepo above, but ReaderViewModel wraps its default as a
+    // `() -> SavedDriveLinkRepository` supplier instead of constructing eagerly (see its doc
+    // comment), so most tests never need this at all -- only ones that exercise the Jump to
+    // Folder tab's saved-links path pass `savedDriveLinkRepo = { savedDriveLinkRepo }` explicitly.
+    private lateinit var savedDriveLinkRepo: SavedDriveLinkRepository
+
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
@@ -77,6 +84,12 @@ class ReaderViewModelTest {
             produceFile = { File(tempFolder.root, "test-connection-${System.nanoTime()}.preferences_pb") }
         )
         connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
+
+        val savedLinksDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "test-saved-links-${System.nanoTime()}.preferences_pb") }
+        )
+        savedDriveLinkRepo = SavedDriveLinkRepository(savedLinksDataStore, ioDispatcher = Dispatchers.Unconfined)
     }
 
     @Test
@@ -580,6 +593,7 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries }
         )
@@ -604,6 +618,7 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else jumpEntries }
         )
@@ -629,6 +644,7 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { folderId, _ -> if (folderId == "nested") nestedEntries else emptyList() }
         )
@@ -653,6 +669,7 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> fakeHits }
@@ -678,6 +695,7 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries },
             searchDriveFolderTree = { _, _, _ -> listOf(com.comicanything.reader.data.repository.DriveSearchHit(DriveEntry.Folder("sub1", "Comics"), emptyList())) }
@@ -705,6 +723,7 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { null },
             fetchDriveFolderContents = { _, _ -> emptyList() }
         )
@@ -714,6 +733,75 @@ class ReaderViewModelTest {
 
         assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.jumpToError)
         assertFalse(viewModel.uiState.value.isLoadingJumpTo)
+    }
+
+    @Test
+    fun `navigateToLinkedFolderInJumpTab records the folder as a recent saved link`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() }
+        )
+
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+
+        val saved = viewModel.uiState.value.savedDriveLinks.single()
+        assertEquals("shared-root", saved.folderId)
+        assertFalse(saved.isFavorite)
+    }
+
+    @Test
+    fun `setJumpToFolderFavorite stars a folder with a custom name`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() }
+        )
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+
+        viewModel.setJumpToFolderFavorite("shared-root", isFavorite = true, customName = "My Comics")
+        advanceUntilIdle()
+
+        val saved = viewModel.uiState.value.savedDriveLinks.single()
+        assertTrue(saved.isFavorite)
+        assertEquals("My Comics", saved.customName)
+    }
+
+    @Test
+    fun `removeSavedDriveLink deletes it from savedDriveLinks`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> emptyList() }
+        )
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.savedDriveLinks.isNotEmpty())
+
+        viewModel.removeSavedDriveLink("shared-root")
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.savedDriveLinks.isEmpty())
     }
 
     @Test

@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.material3.Button
 import androidx.compose.runtime.*
@@ -49,6 +51,7 @@ import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.DriveSearchHit
 import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
+import com.comicanything.reader.data.repository.SavedDriveLink
 import com.comicanything.reader.ui.reader.CoverLoadState
 import com.comicanything.reader.ui.reader.DriveBreadcrumb
 import com.comicanything.reader.ui.reader.LocalBreadcrumb
@@ -298,7 +301,13 @@ fun HomeScreen(
                     onNavigateUp = { index -> viewModel.navigateJumpToUp(index) },
                     onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateJumpToBreadcrumbs(breadcrumbs) },
                     onRetry = { viewModel.retryJumpToFolder() },
-                    onOpenComic = onOpenComic
+                    onOpenComic = onOpenComic,
+                    onSetFavorite = { folderId, isFavorite, customName -> viewModel.setJumpToFolderFavorite(folderId, isFavorite, customName) },
+                    onRemoveSavedLink = { folderId -> viewModel.removeSavedDriveLink(folderId) },
+                    onOpenSavedLink = { folderId ->
+                        driveUrlInput = folderId
+                        viewModel.navigateToLinkedFolderInJumpTab(folderId)
+                    }
                 )
                 3 -> LocalFilesContent(
                     state = state,
@@ -901,8 +910,13 @@ fun JumpToFolderContent(
     onNavigateUp: (Int) -> Unit,
     onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
     onRetry: () -> Unit,
-    onOpenComic: (ComicItem) -> Unit
+    onOpenComic: (ComicItem) -> Unit,
+    onSetFavorite: (String, Boolean, String?) -> Unit,
+    onRemoveSavedLink: (String) -> Unit,
+    onOpenSavedLink: (String) -> Unit
 ) {
+    var favoriteDialogFolderId by remember { mutableStateOf<String?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -952,25 +966,144 @@ fun JumpToFolderContent(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            DriveFolderBrowser(
-                breadcrumbs = state.jumpToBreadcrumbs,
-                entries = entries,
-                error = state.jumpToError,
-                isLoading = state.isLoadingJumpTo,
-                searchResults = searchResults,
-                isSearchingTree = isSearchingTree,
-                searchError = searchError,
-                emptyBreadcrumbsPrompt = "Paste a Drive folder link above to browse it.",
-                onNavigateFolder = onNavigateFolder,
-                onNavigateUp = onNavigateUp,
-                onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
-                onRetry = onRetry,
-                onRetrySearch = onRetrySearch,
-                onOpenComic = onOpenComic
-            )
+
+            val currentRootId = state.jumpToBreadcrumbs.firstOrNull()?.folderId
+            val currentSavedEntry = currentRootId?.let { id -> state.savedDriveLinks.find { it.folderId == id } }
+            if (currentRootId != null) {
+                val isFavorite = currentSavedEntry?.isFavorite == true
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clickable {
+                            if (isFavorite) onSetFavorite(currentRootId, false, null) else favoriteDialogFolderId = currentRootId
+                        }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                        contentDescription = null,
+                        tint = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.Gray,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isFavorite) "Favorited" else "Add to Favorites",
+                        color = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.Gray,
+                        fontSize = 13.sp
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            if (state.jumpToBreadcrumbs.isEmpty() && state.savedDriveLinks.isNotEmpty()) {
+                SavedDriveLinksList(
+                    links = state.savedDriveLinks,
+                    onOpen = onOpenSavedLink,
+                    onRemove = onRemoveSavedLink
+                )
+            } else {
+                DriveFolderBrowser(
+                    breadcrumbs = state.jumpToBreadcrumbs,
+                    entries = entries,
+                    error = state.jumpToError,
+                    isLoading = state.isLoadingJumpTo,
+                    searchResults = searchResults,
+                    isSearchingTree = isSearchingTree,
+                    searchError = searchError,
+                    emptyBreadcrumbsPrompt = "Paste a Drive folder link above to browse it.",
+                    onNavigateFolder = onNavigateFolder,
+                    onNavigateUp = onNavigateUp,
+                    onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
+                    onRetry = onRetry,
+                    onRetrySearch = onRetrySearch,
+                    onOpenComic = onOpenComic
+                )
+            }
         }
     }
+
+    val dialogFolderId = favoriteDialogFolderId
+    if (dialogFolderId != null) {
+        var nameInput by remember(dialogFolderId) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { favoriteDialogFolderId = null },
+            title = { Text("Add to Favorites") },
+            text = {
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = { nameInput = it },
+                    label = { Text("Name (optional)") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSetFavorite(dialogFolderId, true, nameInput.trim().ifEmpty { null })
+                    favoriteDialogFolderId = null
+                }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { favoriteDialogFolderId = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SavedDriveLinksList(
+    links: List<SavedDriveLink>,
+    onOpen: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    val favorites = links.filter { it.isFavorite }.sortedBy { (it.customName ?: it.folderId).lowercase() }
+    val recents = links.filter { !it.isFavorite }.sortedByDescending { it.lastUsedTimestamp }
+
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (favorites.isNotEmpty()) {
+            item {
+                Text("Favorites", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+            }
+            items(favorites) { link -> SavedDriveLinkRow(link, onOpen, onRemove) }
+        }
+        if (recents.isNotEmpty()) {
+            item {
+                Text("Recent", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+            }
+            items(recents) { link -> SavedDriveLinkRow(link, onOpen, onRemove) }
+        }
+    }
+}
+
+@Composable
+private fun SavedDriveLinkRow(
+    link: SavedDriveLink,
+    onOpen: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(link.customName ?: link.folderId, color = Color.White, fontWeight = FontWeight.Bold) },
+        leadingContent = {
+            Icon(
+                imageVector = if (link.isFavorite) Icons.Default.Star else Icons.Default.History,
+                contentDescription = null,
+                tint = if (link.isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+            )
+        },
+        trailingContent = {
+            IconButton(onClick = { onRemove(link.folderId) }) {
+                Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Gray)
+            }
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onOpen(link.folderId) }
+            .background(MaterialTheme.colorScheme.surface)
+    )
 }
 
 @Composable
