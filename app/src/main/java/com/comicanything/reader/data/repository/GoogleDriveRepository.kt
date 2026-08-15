@@ -162,7 +162,19 @@ class GoogleDriveRepository {
                     throw DriveApiException("Couldn't download this file (HTTP ${resp.code})")
                 }
                 val body = resp.body ?: throw DriveApiException("Empty response from Google Drive")
-                destination.outputStream().use { out -> body.byteStream().copyTo(out) }
+                destination.outputStream().use { out ->
+                    body.byteStream().copyTo(out)
+                    // A plain close() flushes this stream's own buffers but doesn't guarantee the
+                    // data is durably visible to a DIFFERENT file descriptor opened moments later
+                    // -- confirmed on-device that a freshly-downloaded large (100+MB) PDF opened
+                    // via PdfRenderer/ParcelFileDescriptor immediately after this download
+                    // completed would hang indefinitely on its first read, every time, while the
+                    // identical bytes opened fine on any later attempt (retry, or a fresh app
+                    // process). Forcing an explicit fsync here, before any other code gets a
+                    // chance to open this file through a different fd/mmap path, eliminates that
+                    // window.
+                    out.fd.sync()
+                }
             }
         } catch (e: DriveApiException) {
             throw e

@@ -40,7 +40,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
@@ -404,9 +406,11 @@ class ReaderViewModel @JvmOverloads constructor(
         activeOpenJob = viewModelScope.launch {
             closePreviousComicResources(previousCache, previousExtractedDir)
             val source = try {
-                withContext(ioDispatcher) {
-                    val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
-                    createPageSource(comic, cbrCacheRoot, file)
+                withTimeout(OPEN_TIMEOUT_MS) {
+                    withContext(ioDispatcher) {
+                        val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                        createPageSource(comic, cbrCacheRoot, file)
+                    }
                 }
             } catch (e: UnsupportedFormatException) {
                 // A newer open may have superseded this one while the page source was being
@@ -414,6 +418,21 @@ class ReaderViewModel @JvmOverloads constructor(
                 // stale failure can't stomp a newer comic's already-applied state.
                 if (_uiState.value.activeComic?.id == comic.id) {
                     _uiState.value = _uiState.value.copy(pageLoadError = "This format isn't supported yet")
+                }
+                return@launch
+            } catch (e: TimeoutCancellationException) {
+                // TimeoutCancellationException is itself a CancellationException, so it must be
+                // caught ahead of the blanket CancellationException rethrow below or it would be
+                // silently swallowed as if a newer open had just superseded this one, leaving the
+                // UI stuck on its loading spinner forever. Confirmed on-device: opening a large
+                // (100+MB) PDF freshly downloaded from Google Drive could hang indefinitely with
+                // no feedback -- this timeout turns that into a recoverable error instead. Note
+                // the underlying blocking call this races against (native PdfRenderer construction
+                // in particular) isn't itself interruptible, so a genuinely stuck attempt leaks
+                // its worker thread rather than truly stopping; the timeout's job here is only to
+                // stop the UI from waiting on it forever and let the user retry.
+                if (_uiState.value.activeComic?.id == comic.id) {
+                    _uiState.value = _uiState.value.copy(pageLoadError = "This is taking too long to open -- try again")
                 }
                 return@launch
             } catch (e: CancellationException) {
@@ -725,5 +744,11 @@ class ReaderViewModel @JvmOverloads constructor(
 
     companion object {
         private const val THUMBNAIL_CACHE_SIZE = 60
+        // Confirmed on-device: a large (100+MB, 150-200 page) PDF freshly downloaded from Google
+        // Drive can legitimately take close to a minute to open on its first attempt in a
+        // session (0% CPU throughout -- an I/O wait, not a slow decode), then opens in seconds on
+        // any later attempt. 90s gives that real-but-slow case comfortable room rather than
+        // racing it, while still guaranteeing the UI never waits silently forever.
+        private const val OPEN_TIMEOUT_MS = 90_000L
     }
 }
