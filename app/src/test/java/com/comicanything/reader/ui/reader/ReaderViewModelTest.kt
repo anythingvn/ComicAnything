@@ -805,6 +805,41 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `clearJumpToFolder resets the jump tab to its starting state without touching saved links or the main Drive tab`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val driveEntries = listOf(DriveEntry.Folder(id = "d1", name = "MyDriveFolder"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            savedDriveLinkRepo = { savedDriveLinkRepo },
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else emptyList() }
+        )
+        viewModel.navigateDriveFolder("root", "My Drive")
+        advanceUntilIdle()
+        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+        viewModel.searchJumpToTree("anything")
+        advanceUntilIdle()
+
+        viewModel.clearJumpToFolder()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.jumpToBreadcrumbs.isEmpty())
+        assertTrue(viewModel.uiState.value.jumpToEntries.isEmpty())
+        assertNull(viewModel.uiState.value.jumpToSearchResults)
+        // The saved-link record from the jump above must survive being cleared -- clearing is
+        // just "go back to the list," not "forget this folder existed."
+        assertTrue(viewModel.uiState.value.savedDriveLinks.any { it.folderId == "shared-root" })
+        // And the main Google Drive tab's own breadcrumb trail must be untouched.
+        assertEquals(listOf("My Drive"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
+        assertEquals(driveEntries, viewModel.uiState.value.driveEntries)
+    }
+
+    @Test
     fun `navigateLocalFolder pushes a breadcrumb and lists the real directory's contents`() = runTest {
         val subfolder = tempFolder.newFolder("Comics")
         File(subfolder, "test.cbz").writeText("fake")

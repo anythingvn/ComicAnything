@@ -510,6 +510,12 @@ class ReaderViewModel @JvmOverloads constructor(
         fetchCurrentJumpToFolder()
     }
 
+    /** Returns the Jump to Folder tab to its starting state (the Favorites/Recent list) without touching the main Google Drive tab. */
+    fun clearJumpToFolder() {
+        clearJumpToSearch()
+        _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = emptyList(), jumpToEntries = emptyList(), jumpToError = null)
+    }
+
     fun navigateLocalFolder(path: String, name: String) {
         _uiState.value = _uiState.value.copy(
             localBreadcrumbs = _uiState.value.localBreadcrumbs + LocalBreadcrumb(path, name)

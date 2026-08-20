@@ -23,7 +23,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -307,6 +309,10 @@ fun HomeScreen(
                     onOpenSavedLink = { folderId ->
                         driveUrlInput = folderId
                         viewModel.navigateToLinkedFolderInJumpTab(folderId)
+                    },
+                    onClearJumpToFolder = {
+                        driveUrlInput = ""
+                        viewModel.clearJumpToFolder()
                     }
                 )
                 3 -> LocalFilesContent(
@@ -713,16 +719,34 @@ private fun DriveFolderBrowser(
     onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
     onRetry: () -> Unit,
     onRetrySearch: () -> Unit,
-    onOpenComic: (ComicItem) -> Unit
+    onOpenComic: (ComicItem) -> Unit,
+    // Only the Jump to Folder tab passes this -- it clears jumpToBreadcrumbs back to the
+    // Favorites/Recent list, a concept the main Google Drive tab (always anchored at My Drive)
+    // doesn't have. When present, it also becomes what the system back button does once there's
+    // no parent folder left to go up to, instead of leaving back a no-op at that point.
+    onHome: (() -> Unit)? = null
 ) {
     if (breadcrumbs.isNotEmpty()) {
-        BackHandler(enabled = breadcrumbs.size > 1) {
-            onNavigateUp(breadcrumbs.size - 2)
+        BackHandler(enabled = breadcrumbs.size > 1 || onHome != null) {
+            if (breadcrumbs.size > 1) onNavigateUp(breadcrumbs.size - 2) else onHome?.invoke()
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (onHome != null) {
+                IconButton(
+                    onClick = onHome,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Home,
+                        contentDescription = "Back to Favorites",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
             if (breadcrumbs.size > 1) {
                 IconButton(
                     onClick = { onNavigateUp(breadcrumbs.size - 2) },
@@ -894,6 +918,7 @@ private fun DriveFolderBrowser(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JumpToFolderContent(
     state: ReaderUiState,
@@ -913,27 +938,40 @@ fun JumpToFolderContent(
     onOpenComic: (ComicItem) -> Unit,
     onSetFavorite: (String, Boolean, String?) -> Unit,
     onRemoveSavedLink: (String) -> Unit,
-    onOpenSavedLink: (String) -> Unit
+    onOpenSavedLink: (String) -> Unit,
+    onClearJumpToFolder: () -> Unit
 ) {
-    var favoriteDialogFolderId by remember { mutableStateOf<String?>(null) }
+    // folderId to the name pre-filled into the dialog -- "" for a brand new favorite, or the
+    // existing custom name when reopened via a saved entry's rename (pencil) icon.
+    var favoriteDialogTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showFavoritesSheet by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Jump to a Drive folder",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 18.sp
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "Paste a shared Google Drive folder link or ID to open it directly, without navigating there by hand.",
-            color = Color.Gray,
-            fontSize = 13.sp
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Jump to a Drive folder",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Paste a shared Google Drive folder link or ID to open it directly, without navigating there by hand.",
+                    color = Color.Gray,
+                    fontSize = 13.sp
+                )
+            }
+            if (state.isDriveConnected) {
+                IconButton(onClick = { showFavoritesSheet = true }) {
+                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(20.dp))
 
         if (!state.isDriveConnected) {
@@ -975,7 +1013,7 @@ fun JumpToFolderContent(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .clickable {
-                            if (isFavorite) onSetFavorite(currentRootId, false, null) else favoriteDialogFolderId = currentRootId
+                            if (isFavorite) onSetFavorite(currentRootId, false, null) else favoriteDialogTarget = currentRootId to ""
                         }
                         .padding(vertical = 8.dp)
                 ) {
@@ -1000,7 +1038,8 @@ fun JumpToFolderContent(
                 SavedDriveLinksList(
                     links = state.savedDriveLinks,
                     onOpen = onOpenSavedLink,
-                    onRemove = onRemoveSavedLink
+                    onRemove = onRemoveSavedLink,
+                    onEdit = { link -> favoriteDialogTarget = link.folderId to (link.customName ?: "") }
                 )
             } else {
                 DriveFolderBrowser(
@@ -1017,18 +1056,21 @@ fun JumpToFolderContent(
                     onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
                     onRetry = onRetry,
                     onRetrySearch = onRetrySearch,
-                    onOpenComic = onOpenComic
+                    onOpenComic = onOpenComic,
+                    onHome = onClearJumpToFolder
                 )
             }
         }
     }
 
-    val dialogFolderId = favoriteDialogFolderId
-    if (dialogFolderId != null) {
-        var nameInput by remember(dialogFolderId) { mutableStateOf("") }
+    val dialogTarget = favoriteDialogTarget
+    if (dialogTarget != null) {
+        val (dialogFolderId, initialName) = dialogTarget
+        val isRename = state.savedDriveLinks.any { it.folderId == dialogFolderId && it.isFavorite }
+        var nameInput by remember(dialogFolderId) { mutableStateOf(initialName) }
         AlertDialog(
-            onDismissRequest = { favoriteDialogFolderId = null },
-            title = { Text("Add to Favorites") },
+            onDismissRequest = { favoriteDialogTarget = null },
+            title = { Text(if (isRename) "Rename Favorite" else "Add to Favorites") },
             text = {
                 OutlinedTextField(
                     value = nameInput,
@@ -1040,17 +1082,45 @@ fun JumpToFolderContent(
             confirmButton = {
                 TextButton(onClick = {
                     onSetFavorite(dialogFolderId, true, nameInput.trim().ifEmpty { null })
-                    favoriteDialogFolderId = null
+                    favoriteDialogTarget = null
                 }) {
                     Text("Save")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { favoriteDialogFolderId = null }) {
+                TextButton(onClick = { favoriteDialogTarget = null }) {
                     Text("Cancel")
                 }
             }
         )
+    }
+
+    if (showFavoritesSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFavoritesSheet = false },
+            containerColor = Color(0xFF1E1E1E)
+        ) {
+            Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp)) {
+                Text("Favorites & Recent", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+                if (state.savedDriveLinks.isEmpty()) {
+                    Text("No saved folders yet.", color = Color.Gray, fontSize = 13.sp)
+                } else {
+                    SavedDriveLinksList(
+                        links = state.savedDriveLinks,
+                        onOpen = { folderId ->
+                            showFavoritesSheet = false
+                            onOpenSavedLink(folderId)
+                        },
+                        onRemove = onRemoveSavedLink,
+                        onEdit = { link ->
+                            showFavoritesSheet = false
+                            favoriteDialogTarget = link.folderId to (link.customName ?: "")
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1058,7 +1128,8 @@ fun JumpToFolderContent(
 private fun SavedDriveLinksList(
     links: List<SavedDriveLink>,
     onOpen: (String) -> Unit,
-    onRemove: (String) -> Unit
+    onRemove: (String) -> Unit,
+    onEdit: (SavedDriveLink) -> Unit
 ) {
     val favorites = links.filter { it.isFavorite }.sortedBy { (it.customName ?: it.folderId).lowercase() }
     val recents = links.filter { !it.isFavorite }.sortedByDescending { it.lastUsedTimestamp }
@@ -1068,13 +1139,13 @@ private fun SavedDriveLinksList(
             item {
                 Text("Favorites", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
             }
-            items(favorites) { link -> SavedDriveLinkRow(link, onOpen, onRemove) }
+            items(favorites) { link -> SavedDriveLinkRow(link, onOpen, onRemove, onEdit) }
         }
         if (recents.isNotEmpty()) {
             item {
                 Text("Recent", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
             }
-            items(recents) { link -> SavedDriveLinkRow(link, onOpen, onRemove) }
+            items(recents) { link -> SavedDriveLinkRow(link, onOpen, onRemove, onEdit) }
         }
     }
 }
@@ -1083,7 +1154,8 @@ private fun SavedDriveLinksList(
 private fun SavedDriveLinkRow(
     link: SavedDriveLink,
     onOpen: (String) -> Unit,
-    onRemove: (String) -> Unit
+    onRemove: (String) -> Unit,
+    onEdit: (SavedDriveLink) -> Unit
 ) {
     ListItem(
         headlineContent = { Text(link.customName ?: link.folderId, color = Color.White, fontWeight = FontWeight.Bold) },
@@ -1095,8 +1167,15 @@ private fun SavedDriveLinkRow(
             )
         },
         trailingContent = {
-            IconButton(onClick = { onRemove(link.folderId) }) {
-                Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Gray)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (link.isFavorite) {
+                    IconButton(onClick = { onEdit(link) }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Rename", tint = Color.Gray)
+                    }
+                }
+                IconButton(onClick = { onRemove(link.folderId) }) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Gray)
+                }
             }
         },
         modifier = Modifier
