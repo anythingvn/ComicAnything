@@ -37,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -93,6 +94,11 @@ data class ReaderUiState(
     val readingMode: ReadingMode = ReadingMode.LTR,
     val filterMode: ColorFilterMode = ColorFilterMode.AMOLED_BLACK,
     val autoCropMargins: Boolean = true,
+    // Home screen's Continue Reading (Recent) tab grid-vs-list toggle. Lives here alongside the
+    // other simple global preferences (readingMode/filterMode/autoCropMargins) rather than as
+    // local Compose state in HomeScreenState, specifically so it persists across app restarts the
+    // same way they do.
+    val isGridLayout: Boolean = true,
     val isControlsVisible: Boolean = true,
     val isLoadingDrive: Boolean = false,
     val hasStoragePermission: Boolean = false,
@@ -389,10 +395,12 @@ class ReaderViewModel @JvmOverloads constructor(
         fetchCurrentJumpToFolder()
         // Recorded regardless of whether the fetch above ends up succeeding -- a saved link is
         // fundamentally "a folder the user pasted," and a transient load failure right now
-        // shouldn't erase that from their recent list. NonCancellable for the same reason as
-        // persistReaderSettings()/persistProgress(): pasting a link and immediately navigating
-        // away must not abandon the write mid-flight.
-        viewModelScope.launch(NonCancellable) {
+        // shouldn't erase that from their recent list. Synchronous (runBlocking) for the same
+        // reason as persistReaderSettings() -- see its comment: NonCancellable only protects
+        // against viewModelScope itself being cancelled, not against the OS killing the whole
+        // process, which real devices confirmed can happen fast enough that a background
+        // coroutine never gets to run at all.
+        runBlocking(ioDispatcher) {
             val repo = savedDriveLinkRepo()
             repo.recordUsed(folderId)
             _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
@@ -407,8 +415,8 @@ class ReaderViewModel @JvmOverloads constructor(
 
     /** Stars or un-stars [folderId], creating a saved entry for it first if it doesn't have one yet (e.g. favoriting a folder immediately after jumping to it). [customName] is only applied when non-null -- un-starring an entry doesn't clear its name. */
     fun setJumpToFolderFavorite(folderId: String, isFavorite: Boolean, customName: String? = null) {
-        // NonCancellable -- see navigateToLinkedFolderInJumpTab's comment above.
-        viewModelScope.launch(NonCancellable) {
+        // Synchronous -- see navigateToLinkedFolderInJumpTab's comment above.
+        runBlocking(ioDispatcher) {
             val repo = savedDriveLinkRepo()
             repo.setFavorite(folderId, isFavorite, customName)
             _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
@@ -416,8 +424,8 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun removeSavedDriveLink(folderId: String) {
-        // NonCancellable -- see navigateToLinkedFolderInJumpTab's comment above.
-        viewModelScope.launch(NonCancellable) {
+        // Synchronous -- see navigateToLinkedFolderInJumpTab's comment above.
+        runBlocking(ioDispatcher) {
             val repo = savedDriveLinkRepo()
             repo.remove(folderId)
             _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
@@ -622,10 +630,10 @@ class ReaderViewModel @JvmOverloads constructor(
             driveError = null,
             driveConnectionVersion = _uiState.value.driveConnectionVersion + 1
         )
-        // NonCancellable -- see persistReaderSettings()'s comment for why a fire-and-forget save
-        // launched from a UI action needs this: connecting Drive and then immediately navigating
-        // away must not abandon the write mid-flight.
-        viewModelScope.launch(NonCancellable) {
+        // Synchronous -- see persistReaderSettings()'s comment: connecting Drive and then
+        // immediately navigating away must not abandon the write mid-flight, and NonCancellable
+        // alone doesn't guarantee that against a killed process.
+        runBlocking(ioDispatcher) {
             connectionRepo.save(DriveConnectionHint(isConnected = true, accountEmail = accountEmail))
         }
     }
@@ -658,8 +666,8 @@ class ReaderViewModel @JvmOverloads constructor(
             driveBreadcrumbs = emptyList(),
             driveError = null
         )
-        // NonCancellable -- see persistReaderSettings()'s comment.
-        viewModelScope.launch(NonCancellable) {
+        // Synchronous -- see persistReaderSettings()'s comment.
+        runBlocking(ioDispatcher) {
             connectionRepo.save(DriveConnectionHint(isConnected = false, accountEmail = null))
         }
     }
@@ -996,11 +1004,16 @@ class ReaderViewModel @JvmOverloads constructor(
         persistReaderSettings()
     }
 
+    fun toggleGridLayout() {
+        _uiState.value = _uiState.value.copy(isGridLayout = !_uiState.value.isGridLayout)
+        persistReaderSettings()
+    }
+
     /**
-     * Loads the persisted Quick Settings (reading mode, color filter, auto-crop) and applies
-     * them to state. Called once from MainActivity.onResume() -- these are simple global
-     * preferences, not permission- or connection-gated, so a single load per app foreground is
-     * enough (no need to re-check like Drive's connection state does).
+     * Loads the persisted Quick Settings (reading mode, color filter, auto-crop, Recent tab
+     * grid/list layout) and applies them to state. Called once from MainActivity.onCreate() --
+     * these are simple global preferences, not permission- or connection-gated, so a single load
+     * per app launch is enough (no need to re-check like Drive's connection state does).
      */
     fun loadReaderSettings() {
         viewModelScope.launch {
@@ -1008,24 +1021,31 @@ class ReaderViewModel @JvmOverloads constructor(
             _uiState.value = _uiState.value.copy(
                 readingMode = settings.readingMode,
                 filterMode = settings.filterMode,
-                autoCropMargins = settings.autoCropMargins
+                autoCropMargins = settings.autoCropMargins,
+                isGridLayout = settings.isGridLayout
             )
         }
     }
 
+    // Deliberately synchronous (blocks the calling thread until the write is actually durable),
+    // not a fire-and-forget `viewModelScope.launch`. A prior attempt used
+    // `viewModelScope.launch(NonCancellable)`, reasoning that the risk was viewModelScope being
+    // cancelled -- but that only protects against the coroutine's OWN scope going away; it does
+    // nothing if the OS kills the whole process outright, which is exactly what happens on
+    // confirmed reports: many Android builds (aggressive OEM task killers in particular, but also
+    // plain force-stop) can SIGKILL an app within a moment of it being backgrounded/swiped away,
+    // with no general guarantee that in-flight background coroutines get to finish first --
+    // NonCancellable or not, a killed process runs no more Kotlin code at all. The only way to
+    // truly guarantee this write survives is to make it happen INSIDE the same call stack as the
+    // user's tap, before this function (and therefore the Compose click handler that invoked it)
+    // ever returns control to the OS -- at which point the process is, by definition, still alive
+    // and actively running (an app can't be mid-event-handler and already killed). The settings
+    // file this writes is a few dozen bytes, so this blocks the main thread for on the order of a
+    // millisecond -- imperceptible, and vastly cheaper than losing the user's choice entirely.
     private fun persistReaderSettings() {
         val state = _uiState.value
-        // NonCancellable, matching persistProgress()'s established pattern: this write is fired
-        // from a Quick Settings tap, and it is completely ordinary for a user to change a setting
-        // and then immediately navigate away (closing the reader, backgrounding the app) well
-        // before this coroutine's disk write would otherwise complete. Without NonCancellable,
-        // viewModelScope getting cancelled at that moment (ViewModel.onCleared()) abandons the
-        // write mid-flight -- the setting applies for the rest of the current session (_uiState
-        // was already updated synchronously above) but was never actually saved to disk, so the
-        // very next app launch loads the old value back. This exactly matches a report that Quick
-        // Settings changes don't survive reopening the app.
-        viewModelScope.launch(NonCancellable) {
-            settingsRepo().save(ReaderSettings(state.readingMode, state.filterMode, state.autoCropMargins))
+        runBlocking(ioDispatcher) {
+            settingsRepo().save(ReaderSettings(state.readingMode, state.filterMode, state.autoCropMargins, state.isGridLayout))
         }
     }
 

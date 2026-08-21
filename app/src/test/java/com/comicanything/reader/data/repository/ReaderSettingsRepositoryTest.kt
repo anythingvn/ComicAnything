@@ -45,7 +45,8 @@ class ReaderSettingsRepositoryTest {
         val saved = ReaderSettings(
             readingMode = ReadingMode.WEBTOON,
             filterMode = ColorFilterMode.SEPIA,
-            autoCropMargins = false
+            autoCropMargins = false,
+            isGridLayout = false
         )
 
         repo.save(saved)
@@ -58,12 +59,13 @@ class ReaderSettingsRepositoryTest {
     fun `save overwrites a previous value`() = runTest {
         val repo = ReaderSettingsRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
 
-        repo.save(ReaderSettings(readingMode = ReadingMode.RTL, filterMode = ColorFilterMode.NIGHT, autoCropMargins = false))
-        repo.save(ReaderSettings(readingMode = ReadingMode.DUAL_SPREAD, filterMode = ColorFilterMode.ORIGINAL, autoCropMargins = true))
+        repo.save(ReaderSettings(readingMode = ReadingMode.RTL, filterMode = ColorFilterMode.NIGHT, autoCropMargins = false, isGridLayout = false))
+        repo.save(ReaderSettings(readingMode = ReadingMode.DUAL_SPREAD, filterMode = ColorFilterMode.ORIGINAL, autoCropMargins = true, isGridLayout = true))
         val loaded = repo.get()
 
         assertEquals(ReadingMode.DUAL_SPREAD, loaded.readingMode)
         assertEquals(ColorFilterMode.ORIGINAL, loaded.filterMode)
         assertEquals(true, loaded.autoCropMargins)
+        assertEquals(true, loaded.isGridLayout)
     }
 }

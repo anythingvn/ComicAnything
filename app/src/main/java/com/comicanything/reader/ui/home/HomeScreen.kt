@@ -116,7 +116,6 @@ class HomeScreenState {
     var searchQuery by mutableStateOf("")
     var isSearchActive by mutableStateOf(false)
     var selectedFormats by mutableStateOf(setOf<ComicFormat>())
-    var isGridLayout by mutableStateOf(true)
 }
 
 @Composable
@@ -267,8 +266,8 @@ fun HomeScreen(
                     onFormatToggle = { format ->
                         homeScreenState.selectedFormats = if (format in homeScreenState.selectedFormats) homeScreenState.selectedFormats - format else homeScreenState.selectedFormats + format
                     },
-                    isGridLayout = homeScreenState.isGridLayout,
-                    onToggleLayout = { homeScreenState.isGridLayout = !homeScreenState.isGridLayout },
+                    isGridLayout = state.isGridLayout,
+                    onToggleLayout = { viewModel.toggleGridLayout() },
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )

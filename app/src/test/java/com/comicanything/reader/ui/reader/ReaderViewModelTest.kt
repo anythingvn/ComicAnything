@@ -65,6 +65,12 @@ class ReaderViewModelTest {
     // Folder tab's saved-links path pass `savedDriveLinkRepo = { savedDriveLinkRepo }` explicitly.
     private lateinit var savedDriveLinkRepo: SavedDriveLinkRepository
 
+    // Same lazy-supplier situation as savedDriveLinkRepo above: only tests that call
+    // setReadingMode/setFilterMode/toggleAutoCrop (which persistReaderSettings() now writes
+    // synchronously via runBlocking, so the hazard fires unconditionally rather than only when a
+    // pending coroutine happened to be pumped) need to pass `settingsRepo = { settingsRepo }`.
+    private lateinit var settingsRepo: ReaderSettingsRepository
+
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
@@ -90,6 +96,12 @@ class ReaderViewModelTest {
             produceFile = { File(tempFolder.root, "test-saved-links-${System.nanoTime()}.preferences_pb") }
         )
         savedDriveLinkRepo = SavedDriveLinkRepository(savedLinksDataStore, ioDispatcher = Dispatchers.Unconfined)
+
+        val settingsDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "test-settings-${System.nanoTime()}.preferences_pb") }
+        )
+        settingsRepo = ReaderSettingsRepository(settingsDataStore, ioDispatcher = Dispatchers.Unconfined)
     }
 
     @Test
@@ -1944,7 +1956,7 @@ class ReaderViewModelTest {
     @Test
     fun `setReadingMode updates readingMode for every mode`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
 
         for (mode in ReadingMode.entries) {
             viewModel.setReadingMode(mode)
@@ -1955,7 +1967,7 @@ class ReaderViewModelTest {
     @Test
     fun `setFilterMode updates filterMode for every mode`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
 
         for (mode in ColorFilterMode.entries) {
             viewModel.setFilterMode(mode)
@@ -1979,7 +1991,7 @@ class ReaderViewModelTest {
     @Test
     fun `toggleAutoCrop flips autoCropMargins each call`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
         assertTrue(viewModel.uiState.value.autoCropMargins)
 
         viewModel.toggleAutoCrop()
@@ -1990,7 +2002,20 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `setReadingMode, setFilterMode, and toggleAutoCrop persist and are restored by loadReaderSettings`() = runTest {
+    fun `toggleGridLayout flips isGridLayout each call`() {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
+        assertTrue(viewModel.uiState.value.isGridLayout)
+
+        viewModel.toggleGridLayout()
+        assertFalse(viewModel.uiState.value.isGridLayout)
+
+        viewModel.toggleGridLayout()
+        assertTrue(viewModel.uiState.value.isGridLayout)
+    }
+
+    @Test
+    fun `setReadingMode, setFilterMode, toggleAutoCrop, and toggleGridLayout persist and are restored by loadReaderSettings`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val settingsDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
             scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
@@ -2002,12 +2027,14 @@ class ReaderViewModelTest {
             localRepo = repo,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            ioDispatcher = Dispatchers.Unconfined,
             settingsRepo = { settingsRepo }
         )
 
         viewModel.setReadingMode(ReadingMode.WEBTOON)
         viewModel.setFilterMode(ColorFilterMode.SEPIA)
         viewModel.toggleAutoCrop()
+        viewModel.toggleGridLayout()
         advanceUntilIdle()
 
         // A fresh ViewModel (simulating an app restart) with the SAME underlying settingsRepo
@@ -2017,6 +2044,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo,
+            ioDispatcher = Dispatchers.Unconfined,
             settingsRepo = { settingsRepo }
         )
         restartedViewModel.loadReaderSettings()
@@ -2025,5 +2053,6 @@ class ReaderViewModelTest {
         assertEquals(ReadingMode.WEBTOON, restartedViewModel.uiState.value.readingMode)
         assertEquals(ColorFilterMode.SEPIA, restartedViewModel.uiState.value.filterMode)
         assertFalse(restartedViewModel.uiState.value.autoCropMargins)
+        assertFalse(restartedViewModel.uiState.value.isGridLayout)
     }
 }

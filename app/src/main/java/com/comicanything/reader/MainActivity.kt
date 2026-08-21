@@ -19,6 +19,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.ui.home.HomeScreen
 import com.comicanything.reader.ui.home.rememberHomeScreenState
@@ -153,13 +156,39 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        checkStoragePermission()
+        viewModel.loadDriveConnectionState()
+        checkDriveAuthorizationSilently()
+    }
+
+    /**
+     * Confirmed on-device: immediately after a cold start, Environment.isExternalStorageManager()
+     * can briefly still report false even though the permission is genuinely granted (appops
+     * shows "allow" the whole time) -- it self-corrects on its own within well under a second, but
+     * a single synchronous check right here can land inside that window and wrongly show the
+     * "Storage access needed" screen for a permission the user already granted in a PREVIOUS
+     * session, forcing them to go grant it all over again. A handful of quick rechecks over a
+     * short window is enough to ride out that settling time without the user ever seeing it, while
+     * a genuinely ungranted permission still correctly shows the request screen once they're
+     * exhausted.
+     */
+    private fun checkStoragePermission() {
         val granted = StoragePermissions.hasAccess(this)
         viewModel.setPermissionGranted(granted)
         if (granted) {
             viewModel.refreshLibrary()
+            return
         }
-        viewModel.loadDriveConnectionState()
-        checkDriveAuthorizationSilently()
+        lifecycleScope.launch {
+            repeat(5) {
+                delay(200)
+                if (StoragePermissions.hasAccess(this@MainActivity)) {
+                    viewModel.setPermissionGranted(true)
+                    viewModel.refreshLibrary()
+                    return@launch
+                }
+            }
+        }
     }
 
     private fun checkDriveAuthorizationSilently() {

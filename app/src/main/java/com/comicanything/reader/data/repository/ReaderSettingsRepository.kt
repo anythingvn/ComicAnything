@@ -20,7 +20,8 @@ import java.io.IOException
 data class ReaderSettings(
     val readingMode: ReadingMode = ReadingMode.LTR,
     val filterMode: ColorFilterMode = ColorFilterMode.AMOLED_BLACK,
-    val autoCropMargins: Boolean = true
+    val autoCropMargins: Boolean = true,
+    val isGridLayout: Boolean = true
 )
 
 private val Context.readerSettingsDataStore: DataStore<Preferences> by preferencesDataStore(
@@ -44,7 +45,8 @@ class ReaderSettingsRepository(
                     ?: defaults.readingMode,
                 filterMode = prefs[FILTER_MODE_KEY]?.let { runCatching { ColorFilterMode.valueOf(it) }.getOrNull() }
                     ?: defaults.filterMode,
-                autoCropMargins = prefs[AUTO_CROP_KEY] ?: defaults.autoCropMargins
+                autoCropMargins = prefs[AUTO_CROP_KEY] ?: defaults.autoCropMargins,
+                isGridLayout = prefs[GRID_LAYOUT_KEY] ?: defaults.isGridLayout
             )
         } catch (e: IOException) {
             ReaderSettings()
@@ -57,6 +59,7 @@ class ReaderSettingsRepository(
                 prefs[READING_MODE_KEY] = settings.readingMode.name
                 prefs[FILTER_MODE_KEY] = settings.filterMode.name
                 prefs[AUTO_CROP_KEY] = settings.autoCropMargins
+                prefs[GRID_LAYOUT_KEY] = settings.isGridLayout
             }
         } catch (e: IOException) {
             // Matches DriveConnectionRepository/ReadingProgressRepository's posture: a failed
@@ -68,5 +71,6 @@ class ReaderSettingsRepository(
         private val READING_MODE_KEY = stringPreferencesKey("reading_mode")
         private val FILTER_MODE_KEY = stringPreferencesKey("filter_mode")
         private val AUTO_CROP_KEY = booleanPreferencesKey("auto_crop_margins")
+        private val GRID_LAYOUT_KEY = booleanPreferencesKey("is_grid_layout")
     }
 }
