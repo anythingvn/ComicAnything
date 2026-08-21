@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <include domain="sharedpref" path="."/>
+    <!-- Jetpack DataStore (reading progress, reader settings, Drive connection hint, saved Drive
+         links) stores its files under files/datastore/, not the sharedpref domain. Without this,
+         none of it was ever included in Auto Backup or device-to-device transfer, so all of it
+         silently came back empty on a new device or after an uninstall+reinstall. -->
+    <include domain="file" path="datastore/"/>
 </full-backup-content>

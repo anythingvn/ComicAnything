@@ -389,8 +389,10 @@ class ReaderViewModel @JvmOverloads constructor(
         fetchCurrentJumpToFolder()
         // Recorded regardless of whether the fetch above ends up succeeding -- a saved link is
         // fundamentally "a folder the user pasted," and a transient load failure right now
-        // shouldn't erase that from their recent list.
-        viewModelScope.launch {
+        // shouldn't erase that from their recent list. NonCancellable for the same reason as
+        // persistReaderSettings()/persistProgress(): pasting a link and immediately navigating
+        // away must not abandon the write mid-flight.
+        viewModelScope.launch(NonCancellable) {
             val repo = savedDriveLinkRepo()
             repo.recordUsed(folderId)
             _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
@@ -405,7 +407,8 @@ class ReaderViewModel @JvmOverloads constructor(
 
     /** Stars or un-stars [folderId], creating a saved entry for it first if it doesn't have one yet (e.g. favoriting a folder immediately after jumping to it). [customName] is only applied when non-null -- un-starring an entry doesn't clear its name. */
     fun setJumpToFolderFavorite(folderId: String, isFavorite: Boolean, customName: String? = null) {
-        viewModelScope.launch {
+        // NonCancellable -- see navigateToLinkedFolderInJumpTab's comment above.
+        viewModelScope.launch(NonCancellable) {
             val repo = savedDriveLinkRepo()
             repo.setFavorite(folderId, isFavorite, customName)
             _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
@@ -413,7 +416,8 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun removeSavedDriveLink(folderId: String) {
-        viewModelScope.launch {
+        // NonCancellable -- see navigateToLinkedFolderInJumpTab's comment above.
+        viewModelScope.launch(NonCancellable) {
             val repo = savedDriveLinkRepo()
             repo.remove(folderId)
             _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
@@ -618,7 +622,10 @@ class ReaderViewModel @JvmOverloads constructor(
             driveError = null,
             driveConnectionVersion = _uiState.value.driveConnectionVersion + 1
         )
-        viewModelScope.launch {
+        // NonCancellable -- see persistReaderSettings()'s comment for why a fire-and-forget save
+        // launched from a UI action needs this: connecting Drive and then immediately navigating
+        // away must not abandon the write mid-flight.
+        viewModelScope.launch(NonCancellable) {
             connectionRepo.save(DriveConnectionHint(isConnected = true, accountEmail = accountEmail))
         }
     }
@@ -651,7 +658,8 @@ class ReaderViewModel @JvmOverloads constructor(
             driveBreadcrumbs = emptyList(),
             driveError = null
         )
-        viewModelScope.launch {
+        // NonCancellable -- see persistReaderSettings()'s comment.
+        viewModelScope.launch(NonCancellable) {
             connectionRepo.save(DriveConnectionHint(isConnected = false, accountEmail = null))
         }
     }
@@ -1007,7 +1015,16 @@ class ReaderViewModel @JvmOverloads constructor(
 
     private fun persistReaderSettings() {
         val state = _uiState.value
-        viewModelScope.launch {
+        // NonCancellable, matching persistProgress()'s established pattern: this write is fired
+        // from a Quick Settings tap, and it is completely ordinary for a user to change a setting
+        // and then immediately navigate away (closing the reader, backgrounding the app) well
+        // before this coroutine's disk write would otherwise complete. Without NonCancellable,
+        // viewModelScope getting cancelled at that moment (ViewModel.onCleared()) abandons the
+        // write mid-flight -- the setting applies for the rest of the current session (_uiState
+        // was already updated synchronously above) but was never actually saved to disk, so the
+        // very next app launch loads the old value back. This exactly matches a report that Quick
+        // Settings changes don't survive reopening the app.
+        viewModelScope.launch(NonCancellable) {
             settingsRepo().save(ReaderSettings(state.readingMode, state.filterMode, state.autoCropMargins))
         }
     }
