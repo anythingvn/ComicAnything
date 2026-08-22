@@ -21,6 +21,8 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Edit
@@ -285,7 +287,11 @@ fun HomeScreen(
                     onOpenComic = onOpenComic,
                     onConnectDrive = onConnectDrive,
                     onDisconnectDrive = onDisconnectDrive,
-                    onSwitchDriveAccount = onSwitchDriveAccount
+                    onSwitchDriveAccount = onSwitchDriveAccount,
+                    onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
+                    onDeleteComicCache = { comicId -> viewModel.deleteDriveComicCache(comicId) },
+                    onDownloadFolder = { folderId -> viewModel.downloadDriveFolder(folderId) },
+                    onClearCache = { viewModel.clearDriveCache() }
                 )
                 2 -> JumpToFolderContent(
                     state = state,
@@ -312,7 +318,10 @@ fun HomeScreen(
                     onClearJumpToFolder = {
                         driveUrlInput = ""
                         viewModel.clearJumpToFolder()
-                    }
+                    },
+                    onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
+                    onDeleteComicCache = { comicId -> viewModel.deleteDriveComicCache(comicId) },
+                    onDownloadFolder = { folderId -> viewModel.downloadDriveFolder(folderId) }
                 )
                 3 -> LocalFilesContent(
                     state = state,
@@ -622,7 +631,11 @@ fun DriveContent(
     onOpenComic: (ComicItem) -> Unit,
     onConnectDrive: () -> Unit,
     onDisconnectDrive: () -> Unit,
-    onSwitchDriveAccount: () -> Unit
+    onSwitchDriveAccount: () -> Unit,
+    onDownloadComic: (ComicItem) -> Unit,
+    onDeleteComicCache: (String) -> Unit,
+    onDownloadFolder: (String) -> Unit,
+    onClearCache: () -> Unit
 ) {
     LaunchedEffect(state.driveConnectionVersion) {
         if (state.isDriveConnected && state.driveBreadcrumbs.isEmpty()) {
@@ -646,6 +659,9 @@ fun DriveContent(
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
+                TextButton(onClick = onClearCache) {
+                    Text("Clear cache")
+                }
                 TextButton(onClick = onSwitchDriveAccount) {
                     Text("Switch Account")
                 }
@@ -682,7 +698,13 @@ fun DriveContent(
                 onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
                 onRetry = onRetry,
                 onRetrySearch = onRetrySearch,
-                onOpenComic = onOpenComic
+                onOpenComic = onOpenComic,
+                downloadingIds = state.driveDownloadingIds,
+                cachedIds = state.driveCachedIds,
+                downloadingFolderIds = state.driveDownloadingFolderIds,
+                onDownloadComic = onDownloadComic,
+                onDeleteComicCache = onDeleteComicCache,
+                onDownloadFolder = onDownloadFolder
             )
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -693,6 +715,53 @@ fun DriveContent(
                     textAlign = TextAlign.Center
                 )
             }
+        }
+    }
+}
+
+/**
+ * Download-for-offline / remove-from-cache control shown on a Drive comic file row. Downloading
+ * shows a small spinner in place of the icon; cached shows a delete icon instead of the download
+ * icon, so the same control doubles as the "remove from cache" action once a file is there.
+ */
+@Composable
+private fun DriveComicDownloadAction(
+    isDownloading: Boolean,
+    isCached: Boolean,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit
+) {
+    when {
+        isDownloading -> Box(modifier = Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.secondary
+            )
+        }
+        isCached -> IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Delete, contentDescription = "Remove downloaded file", tint = MaterialTheme.colorScheme.secondary)
+        }
+        else -> IconButton(onClick = onDownload, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Download, contentDescription = "Download for offline reading", tint = MaterialTheme.colorScheme.secondary)
+        }
+    }
+}
+
+/** Same idea as [DriveComicDownloadAction] but for a folder row: downloads every comic file directly inside it. No delete state -- clearing cache is a separate, explicit "Clear cache" action, not per-folder. */
+@Composable
+private fun DriveFolderDownloadAction(isDownloading: Boolean, onDownload: () -> Unit) {
+    if (isDownloading) {
+        Box(modifier = Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.secondary
+            )
+        }
+    } else {
+        IconButton(onClick = onDownload, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Download, contentDescription = "Download all files in this folder", tint = MaterialTheme.colorScheme.secondary)
         }
     }
 }
@@ -719,6 +788,12 @@ private fun DriveFolderBrowser(
     onRetry: () -> Unit,
     onRetrySearch: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
+    downloadingIds: Set<String>,
+    cachedIds: Set<String>,
+    downloadingFolderIds: Set<String>,
+    onDownloadComic: (ComicItem) -> Unit,
+    onDeleteComicCache: (String) -> Unit,
+    onDownloadFolder: (String) -> Unit,
     // Only the Jump to Folder tab passes this -- it clears jumpToBreadcrumbs back to the
     // Favorites/Recent list, a concept the main Google Drive tab (always anchored at My Drive)
     // doesn't have. When present, it also becomes what the system back button does once there's
@@ -844,7 +919,15 @@ private fun DriveFolderBrowser(
                                 headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
                                 supportingContent = pathLabel?.let { { Text(it, color = Color.Gray, fontSize = 12.sp) } },
                                 leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        DriveFolderDownloadAction(
+                                            isDownloading = entry.id in downloadingFolderIds,
+                                            onDownload = { onDownloadFolder(entry.id) }
+                                        )
+                                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                                    }
+                                },
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .clickable { onNavigateToBreadcrumbs(driveBreadcrumbsForHit(breadcrumbs, hit, entry)) }
@@ -854,7 +937,17 @@ private fun DriveFolderBrowser(
                                 headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
                                 supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
                                 leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                                trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        DriveComicDownloadAction(
+                                            isDownloading = entry.comic.id in downloadingIds,
+                                            isCached = entry.comic.id in cachedIds,
+                                            onDownload = { onDownloadComic(entry.comic) },
+                                            onDelete = { onDeleteComicCache(entry.comic.id) }
+                                        )
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                                    }
+                                },
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .clickable { onOpenComic(entry.comic) }
@@ -894,7 +987,15 @@ private fun DriveFolderBrowser(
                         is DriveEntry.Folder -> ListItem(
                             headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
                             leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                            trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                            trailingContent = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    DriveFolderDownloadAction(
+                                        isDownloading = entry.id in downloadingFolderIds,
+                                        onDownload = { onDownloadFolder(entry.id) }
+                                    )
+                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                                }
+                            },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable { onNavigateFolder(entry.id, entry.name) }
@@ -904,7 +1005,17 @@ private fun DriveFolderBrowser(
                             headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
                             supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
                             leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                            trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                            trailingContent = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    DriveComicDownloadAction(
+                                        isDownloading = entry.comic.id in downloadingIds,
+                                        isCached = entry.comic.id in cachedIds,
+                                        onDownload = { onDownloadComic(entry.comic) },
+                                        onDelete = { onDeleteComicCache(entry.comic.id) }
+                                    )
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                                }
+                            },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable { onOpenComic(entry.comic) }
@@ -938,7 +1049,10 @@ fun JumpToFolderContent(
     onSetFavorite: (String, Boolean, String?) -> Unit,
     onRemoveSavedLink: (String) -> Unit,
     onOpenSavedLink: (String) -> Unit,
-    onClearJumpToFolder: () -> Unit
+    onClearJumpToFolder: () -> Unit,
+    onDownloadComic: (ComicItem) -> Unit,
+    onDeleteComicCache: (String) -> Unit,
+    onDownloadFolder: (String) -> Unit
 ) {
     // folderId to the name pre-filled into the dialog -- "" for a brand new favorite, or the
     // existing custom name when reopened via a saved entry's rename (pencil) icon.
@@ -1056,6 +1170,12 @@ fun JumpToFolderContent(
                     onRetry = onRetry,
                     onRetrySearch = onRetrySearch,
                     onOpenComic = onOpenComic,
+                    downloadingIds = state.driveDownloadingIds,
+                    cachedIds = state.driveCachedIds,
+                    downloadingFolderIds = state.driveDownloadingFolderIds,
+                    onDownloadComic = onDownloadComic,
+                    onDeleteComicCache = onDeleteComicCache,
+                    onDownloadFolder = onDownloadFolder,
                     onHome = onClearJumpToFolder
                 )
             }

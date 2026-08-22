@@ -398,6 +398,150 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `downloadDriveComic marks the comic downloading then cached`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var resolverCalls = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            comicFileResolver = { _, _, _ -> resolverCalls++; File(tempFolder.root, "fake") }
+        )
+        val comic = ComicItem(id = "d1", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
+
+        viewModel.downloadDriveComic(comic)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.driveCachedIds.contains("d1"))
+        assertTrue(viewModel.uiState.value.driveDownloadingIds.isEmpty())
+        assertEquals(1, resolverCalls)
+    }
+
+    @Test
+    fun `downloadDriveComic is a no-op when already cached`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var resolverCalls = 0
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            comicFileResolver = { _, _, _ -> resolverCalls++; File(tempFolder.root, "fake") }
+        )
+        val comic = ComicItem(id = "d2", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
+
+        viewModel.downloadDriveComic(comic)
+        advanceUntilIdle()
+        viewModel.downloadDriveComic(comic)
+        advanceUntilIdle()
+
+        assertEquals(1, resolverCalls)
+    }
+
+    @Test
+    fun `downloadDriveComic leaves the comic uncached when resolution fails`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            comicFileResolver = { _, _, _ -> throw DriveApiException("network error") }
+        )
+        val comic = ComicItem(id = "d3", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
+
+        viewModel.downloadDriveComic(comic)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.driveCachedIds.contains("d3"))
+        assertTrue(viewModel.uiState.value.driveDownloadingIds.isEmpty())
+    }
+
+    @Test
+    fun `deleteDriveComicCache removes the cached file and its id from state`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val cache = com.comicanything.reader.data.repository.DriveFileCache(tempFolder.newFolder("drive-cache"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveFileCache = { cache },
+            comicFileResolver = { comic, driveCache, _ -> driveCache().download(comic.id) { it.writeText("data") } }
+        )
+        val comic = ComicItem(id = "d4", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
+        viewModel.downloadDriveComic(comic)
+        advanceUntilIdle()
+        assertTrue(cache.cachedFile("d4") != null)
+
+        viewModel.deleteDriveComicCache("d4")
+
+        assertNull(cache.cachedFile("d4"))
+        assertFalse(viewModel.uiState.value.driveCachedIds.contains("d4"))
+    }
+
+    @Test
+    fun `downloadDriveFolder downloads only the comic files directly in that folder, skipping already-cached ones`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        var resolverCalls = mutableListOf<String>()
+        val folderEntries = listOf(
+            DriveEntry.Folder(id = "sub", name = "Subfolder"),
+            DriveEntry.ComicFile(ComicItem(id = "f1", title = "One", pathOrUrl = "url1", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)),
+            DriveEntry.ComicFile(ComicItem(id = "f2", title = "Two", pathOrUrl = "url2", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ))
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveAccessToken = { "token" },
+            fetchDriveFolderContents = { _, _ -> folderEntries },
+            comicFileResolver = { comic, _, _ -> resolverCalls.add(comic.id); File(tempFolder.root, "fake") }
+        )
+
+        viewModel.downloadDriveFolder("root")
+        advanceUntilIdle()
+
+        assertEquals(listOf("f1", "f2"), resolverCalls)
+        assertEquals(setOf("f1", "f2"), viewModel.uiState.value.driveCachedIds)
+        assertTrue(viewModel.uiState.value.driveDownloadingFolderIds.isEmpty())
+    }
+
+    @Test
+    fun `clearDriveCache empties every cached file and clears driveCachedIds`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val cache = com.comicanything.reader.data.repository.DriveFileCache(tempFolder.newFolder("drive-cache-2"))
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveFileCache = { cache },
+            comicFileResolver = { comic, driveCache, _ -> driveCache().download(comic.id) { it.writeText("data") } }
+        )
+        val comicA = ComicItem(id = "c1", title = "A", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
+        val comicB = ComicItem(id = "c2", title = "B", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
+        viewModel.downloadDriveComic(comicA)
+        advanceUntilIdle()
+        viewModel.downloadDriveComic(comicB)
+        advanceUntilIdle()
+        assertEquals(2, cache.let { c -> listOf(c.cachedFile("c1"), c.cachedFile("c2")).count { it != null } })
+
+        viewModel.clearDriveCache()
+
+        assertNull(cache.cachedFile("c1"))
+        assertNull(cache.cachedFile("c2"))
+        assertTrue(viewModel.uiState.value.driveCachedIds.isEmpty())
+    }
+
+    @Test
     fun `navigateDriveFolder without a connected token sets a not-connected error and never calls the repository`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(

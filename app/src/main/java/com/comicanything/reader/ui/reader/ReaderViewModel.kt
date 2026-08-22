@@ -115,7 +115,21 @@ data class ReaderUiState(
     // already connected, so it would never re-fire and the UI would get stuck showing cleared
     // (empty) breadcrumbs/entries with no re-fetch.
     val driveConnectionVersion: Int = 0,
-    val epubBook: EpubBook? = null
+    val epubBook: EpubBook? = null,
+    // Drive file ids currently mid-download (either a single-file "download for offline reading"
+    // tap, or one being processed as part of a folder batch) -- drives the spinner shown in place
+    // of the download/delete icon on that row.
+    val driveDownloadingIds: Set<String> = emptySet(),
+    // Drive file ids known to have a cached copy on disk (see DriveFileCache), maintained purely
+    // by this session's own downloadDriveComic/downloadDriveFolder/deleteDriveComicCache/
+    // clearDriveCache calls -- drives whether a row shows the download icon or the delete icon.
+    // Deliberately NOT reconciled against the filesystem when a folder's entries load: a file
+    // cached in an earlier session (or by a previous downloadDriveFolder run) just shows the
+    // download icon again until re-downloaded, which is a much cheaper and simpler contract than
+    // stat-ing every visible entry's cache file on every folder open.
+    val driveCachedIds: Set<String> = emptySet(),
+    // Folder ids currently running a "download everything directly in this folder" batch.
+    val driveDownloadingFolderIds: Set<String> = emptySet()
 )
 
 sealed interface PageLoadState {
@@ -324,6 +338,62 @@ class ReaderViewModel @JvmOverloads constructor(
                 )
             }
         }
+    }
+
+    /** Downloads [comic] into the Drive cache ahead of time, without opening the reader. A no-op if it's already cached or already downloading. */
+    fun downloadDriveComic(comic: ComicItem) {
+        val state = _uiState.value
+        if (comic.id in state.driveDownloadingIds || comic.id in state.driveCachedIds) return
+        viewModelScope.launch { downloadOneDriveComic(comic) }
+    }
+
+    /** Shared by [downloadDriveComic] and [downloadDriveFolder]'s per-file loop -- marks [comic] downloading, resolves it via [comicFileResolver] (which caches through [driveFileCache] the same way opening a comic does), then marks it cached or leaves it uncached on failure. */
+    private suspend fun downloadOneDriveComic(comic: ComicItem) {
+        if (comic.id in _uiState.value.driveCachedIds) return
+        _uiState.value = _uiState.value.copy(driveDownloadingIds = _uiState.value.driveDownloadingIds + comic.id)
+        try {
+            comicFileResolver(comic, driveFileCache, driveAccessToken)
+            _uiState.value = _uiState.value.copy(driveCachedIds = _uiState.value.driveCachedIds + comic.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Leave it uncached -- the row's download icon reappears so the user can retry.
+        } finally {
+            _uiState.value = _uiState.value.copy(driveDownloadingIds = _uiState.value.driveDownloadingIds - comic.id)
+        }
+    }
+
+    /** Removes [comicId]'s cached file, if any, so it no longer counts toward the Drive cache. Available any time, independent of read progress. */
+    fun deleteDriveComicCache(comicId: String) {
+        driveFileCache().cachedFile(comicId)?.delete()
+        _uiState.value = _uiState.value.copy(driveCachedIds = _uiState.value.driveCachedIds - comicId)
+    }
+
+    /** Downloads every comic file directly inside [folderId] (not recursing into subfolders) sequentially, skipping ones already cached. A no-op if this folder's batch is already running. */
+    fun downloadDriveFolder(folderId: String) {
+        if (folderId in _uiState.value.driveDownloadingFolderIds) return
+        _uiState.value = _uiState.value.copy(driveDownloadingFolderIds = _uiState.value.driveDownloadingFolderIds + folderId)
+        viewModelScope.launch {
+            try {
+                val token = driveAccessToken() ?: return@launch
+                val entries = fetchDriveFolderContents(folderId, token)
+                entries.filterIsInstance<DriveEntry.ComicFile>().forEach { downloadOneDriveComic(it.comic) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Couldn't even list the folder's contents -- nothing to download. Per-file
+                // failures inside downloadOneDriveComic are already handled without aborting the
+                // rest of the batch, so this only guards the initial fetchDriveFolderContents call.
+            } finally {
+                _uiState.value = _uiState.value.copy(driveDownloadingFolderIds = _uiState.value.driveDownloadingFolderIds - folderId)
+            }
+        }
+    }
+
+    /** Clears every Drive file currently cached on disk. */
+    fun clearDriveCache() {
+        driveFileCache().clearAll()
+        _uiState.value = _uiState.value.copy(driveCachedIds = emptySet())
     }
 
     /**

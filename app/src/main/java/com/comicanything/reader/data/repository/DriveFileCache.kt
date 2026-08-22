@@ -47,6 +47,11 @@ class DriveFileCache(
         return finalFile
     }
 
+    /** Deletes every cached file (and any leftover ".part" temp file) from disk. */
+    fun clearAll() {
+        cacheDir.listFiles()?.forEach { it.delete() }
+    }
+
     private fun evictIfNeeded(excluding: File) {
         val files = cacheDir.listFiles { f -> !f.name.endsWith(".part") } ?: return
         var totalSize = files.sumOf { it.length() }
