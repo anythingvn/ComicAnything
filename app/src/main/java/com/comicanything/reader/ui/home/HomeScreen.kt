@@ -334,6 +334,7 @@ fun HomeScreen(
                 )
                 3 -> LocalFilesContent(
                     state = state,
+                    viewModel = viewModel,
                     entries = state.localEntries,
                     searchResults = state.localSearchResults,
                     isSearchingTree = state.isSearchingLocalTree,
@@ -1460,6 +1461,7 @@ private fun SavedDriveLinkRow(
 @Composable
 fun LocalFilesContent(
     state: ReaderUiState,
+    viewModel: ReaderViewModel,
     entries: List<LocalEntry>,
     searchResults: List<LocalEntry>?,
     isSearchingTree: Boolean,
@@ -1575,7 +1577,15 @@ fun LocalFilesContent(
                                     ListItem(
                                         headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
                                         supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
-                                        leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                        leadingContent = {
+                                            ComicCoverThumbnail(
+                                                comic = entry.comic,
+                                                viewModel = viewModel,
+                                                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(4.dp)),
+                                                iconSize = 20.dp,
+                                                iconTint = MaterialTheme.colorScheme.primary
+                                            )
+                                        },
                                         trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(8.dp))
@@ -1616,7 +1626,15 @@ fun LocalFilesContent(
                             is LocalEntry.ComicFile -> ListItem(
                                 headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
                                 supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
-                                leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                leadingContent = {
+                                    ComicCoverThumbnail(
+                                        comic = entry.comic,
+                                        viewModel = viewModel,
+                                        modifier = Modifier.size(40.dp).clip(RoundedCornerShape(4.dp)),
+                                        iconSize = 20.dp,
+                                        iconTint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
                                 trailingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
