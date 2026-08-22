@@ -291,7 +291,10 @@ fun HomeScreen(
                     onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
                     onDeleteComicCache = { comicId -> viewModel.deleteDriveComicCache(comicId) },
                     onDownloadFolder = { folderId -> viewModel.downloadDriveFolder(folderId) },
-                    onClearCache = { viewModel.clearDriveCache() }
+                    onClearCache = { viewModel.clearDriveCache() },
+                    onSetFavorite = { folderId, isFavorite, customName -> viewModel.setFolderFavorite(folderId, isFavorite, customName) },
+                    onRemoveSavedLink = { folderId -> viewModel.removeSavedDriveLink(folderId) },
+                    onOpenSavedFolder = { folderId, name -> viewModel.navigateDriveToBreadcrumbs(listOf(DriveBreadcrumb(folderId, name))) }
                 )
                 2 -> JumpToFolderContent(
                     state = state,
@@ -309,7 +312,7 @@ fun HomeScreen(
                     onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateJumpToBreadcrumbs(breadcrumbs) },
                     onRetry = { viewModel.retryJumpToFolder() },
                     onOpenComic = onOpenComic,
-                    onSetFavorite = { folderId, isFavorite, customName -> viewModel.setJumpToFolderFavorite(folderId, isFavorite, customName) },
+                    onSetFavorite = { folderId, isFavorite, customName -> viewModel.setFolderFavorite(folderId, isFavorite, customName) },
                     onRemoveSavedLink = { folderId -> viewModel.removeSavedDriveLink(folderId) },
                     onOpenSavedLink = { folderId ->
                         driveUrlInput = folderId
@@ -616,6 +619,7 @@ fun FormatFilterRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DriveContent(
     state: ReaderUiState,
@@ -635,8 +639,18 @@ fun DriveContent(
     onDownloadComic: (ComicItem) -> Unit,
     onDeleteComicCache: (String) -> Unit,
     onDownloadFolder: (String) -> Unit,
-    onClearCache: () -> Unit
+    onClearCache: () -> Unit,
+    onSetFavorite: (String, Boolean, String?) -> Unit,
+    onRemoveSavedLink: (String) -> Unit,
+    // Jumps straight to a favorited/recent folder from within the Google Drive tab -- replaces
+    // driveBreadcrumbs with a single entry for it (same "treat it as a fresh landing spot, don't
+    // reconstruct the real parent chain" tradeoff navigateToLinkedFolderInJumpTab already makes
+    // for the Jump to Folder tab).
+    onOpenSavedFolder: (String, String) -> Unit
 ) {
+    var favoriteDialogTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showFavoritesSheet by remember { mutableStateOf(false) }
+
     LaunchedEffect(state.driveConnectionVersion) {
         if (state.isDriveConnected && state.driveBreadcrumbs.isEmpty()) {
             onNavigateFolder("root", "My Drive")
@@ -659,6 +673,9 @@ fun DriveContent(
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(onClick = { showFavoritesSheet = true }) {
+                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
+                }
                 TextButton(onClick = onClearCache) {
                     Text("Clear cache")
                 }
@@ -704,7 +721,11 @@ fun DriveContent(
                 downloadingFolderIds = state.driveDownloadingFolderIds,
                 onDownloadComic = onDownloadComic,
                 onDeleteComicCache = onDeleteComicCache,
-                onDownloadFolder = onDownloadFolder
+                onDownloadFolder = onDownloadFolder,
+                favoriteFolderIds = state.savedDriveLinks.filter { it.isFavorite }.map { it.folderId }.toSet(),
+                onToggleFolderFavorite = { folder, isFavorite ->
+                    onSetFavorite(folder.id, !isFavorite, folder.name)
+                }
             )
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -714,6 +735,66 @@ fun DriveContent(
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center
                 )
+            }
+        }
+    }
+
+    val dialogTarget = favoriteDialogTarget
+    if (dialogTarget != null) {
+        val (dialogFolderId, initialName) = dialogTarget
+        var nameInput by remember(dialogFolderId) { mutableStateOf(initialName) }
+        AlertDialog(
+            onDismissRequest = { favoriteDialogTarget = null },
+            title = { Text("Rename Favorite") },
+            text = {
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = { nameInput = it },
+                    label = { Text("Name (optional)") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSetFavorite(dialogFolderId, true, nameInput.trim().ifEmpty { null })
+                    favoriteDialogTarget = null
+                }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { favoriteDialogTarget = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showFavoritesSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFavoritesSheet = false },
+            containerColor = Color(0xFF1E1E1E)
+        ) {
+            Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp)) {
+                Text("Favorites & Recent", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+                if (state.savedDriveLinks.isEmpty()) {
+                    Text("No saved folders yet.", color = Color.Gray, fontSize = 13.sp)
+                } else {
+                    SavedDriveLinksList(
+                        links = state.savedDriveLinks,
+                        onOpen = { folderId ->
+                            showFavoritesSheet = false
+                            val name = state.savedDriveLinks.find { it.folderId == folderId }?.customName ?: folderId
+                            onOpenSavedFolder(folderId, name)
+                        },
+                        onRemove = onRemoveSavedLink,
+                        onEdit = { link ->
+                            showFavoritesSheet = false
+                            favoriteDialogTarget = link.folderId to (link.customName ?: "")
+                        }
+                    )
+                }
             }
         }
     }
@@ -766,6 +847,18 @@ private fun DriveFolderDownloadAction(isDownloading: Boolean, onDownload: () -> 
     }
 }
 
+/** Star toggle shown on a folder row -- favorites are shared across the Google Drive and Jump to Folder tabs (see [ReaderViewModel.setFolderFavorite]), so starring a folder here shows up in either tab's Favorites sheet. */
+@Composable
+private fun DriveFolderFavoriteAction(isFavorite: Boolean, onToggle: () -> Unit) {
+    IconButton(onClick = onToggle, modifier = Modifier.size(32.dp)) {
+        Icon(
+            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+            contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+            tint = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.Gray
+        )
+    }
+}
+
 /**
  * The breadcrumb trail + folder listing (or search results) shared by the Google Drive tab and
  * the Jump to Folder tab -- each drives it from its own independent breadcrumb/entries state (see
@@ -794,6 +887,8 @@ private fun DriveFolderBrowser(
     onDownloadComic: (ComicItem) -> Unit,
     onDeleteComicCache: (String) -> Unit,
     onDownloadFolder: (String) -> Unit,
+    favoriteFolderIds: Set<String>,
+    onToggleFolderFavorite: (DriveEntry.Folder, Boolean) -> Unit,
     // Only the Jump to Folder tab passes this -- it clears jumpToBreadcrumbs back to the
     // Favorites/Recent list, a concept the main Google Drive tab (always anchored at My Drive)
     // doesn't have. When present, it also becomes what the system back button does once there's
@@ -921,6 +1016,10 @@ private fun DriveFolderBrowser(
                                 leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                                 trailingContent = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        DriveFolderFavoriteAction(
+                                            isFavorite = entry.id in favoriteFolderIds,
+                                            onToggle = { onToggleFolderFavorite(entry, entry.id in favoriteFolderIds) }
+                                        )
                                         DriveFolderDownloadAction(
                                             isDownloading = entry.id in downloadingFolderIds,
                                             onDownload = { onDownloadFolder(entry.id) }
@@ -989,6 +1088,10 @@ private fun DriveFolderBrowser(
                             leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                             trailingContent = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    DriveFolderFavoriteAction(
+                                        isFavorite = entry.id in favoriteFolderIds,
+                                        onToggle = { onToggleFolderFavorite(entry, entry.id in favoriteFolderIds) }
+                                    )
                                     DriveFolderDownloadAction(
                                         isDownloading = entry.id in downloadingFolderIds,
                                         onDownload = { onDownloadFolder(entry.id) }
@@ -1176,6 +1279,10 @@ fun JumpToFolderContent(
                     onDownloadComic = onDownloadComic,
                     onDeleteComicCache = onDeleteComicCache,
                     onDownloadFolder = onDownloadFolder,
+                    favoriteFolderIds = state.savedDriveLinks.filter { it.isFavorite }.map { it.folderId }.toSet(),
+                    onToggleFolderFavorite = { folder, isFavorite ->
+                        onSetFavorite(folder.id, !isFavorite, folder.name)
+                    },
                     onHome = onClearJumpToFolder
                 )
             }

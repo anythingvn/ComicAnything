@@ -493,8 +493,8 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    /** Stars or un-stars [folderId], creating a saved entry for it first if it doesn't have one yet (e.g. favoriting a folder immediately after jumping to it). [customName] is only applied when non-null -- un-starring an entry doesn't clear its name. */
-    fun setJumpToFolderFavorite(folderId: String, isFavorite: Boolean, customName: String? = null) {
+    /** Stars or un-stars [folderId], creating a saved entry for it first if it doesn't have one yet (e.g. favoriting a folder immediately after jumping to it). [customName] is only applied when non-null -- un-starring an entry doesn't clear its name. Shared by both the Google Drive tab and the Jump to Folder tab -- favorites aren't scoped to whichever tab a folder was found through. */
+    fun setFolderFavorite(folderId: String, isFavorite: Boolean, customName: String? = null) {
         // Synchronous -- see navigateToLinkedFolderInJumpTab's comment above.
         runBlocking(ioDispatcher) {
             val repo = savedDriveLinkRepo()

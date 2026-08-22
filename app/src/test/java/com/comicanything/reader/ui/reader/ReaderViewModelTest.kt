@@ -914,7 +914,7 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `setJumpToFolderFavorite stars a folder with a custom name`() = runTest {
+    fun `setFolderFavorite stars a folder with a custom name`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -929,7 +929,7 @@ class ReaderViewModelTest {
         viewModel.navigateToLinkedFolderInJumpTab("shared-root")
         advanceUntilIdle()
 
-        viewModel.setJumpToFolderFavorite("shared-root", isFavorite = true, customName = "My Comics")
+        viewModel.setFolderFavorite("shared-root", isFavorite = true, customName = "My Comics")
         advanceUntilIdle()
 
         val saved = viewModel.uiState.value.savedDriveLinks.single()
