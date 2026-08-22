@@ -20,14 +20,19 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -40,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -342,6 +348,16 @@ fun HomeScreen(
     }
 }
 
+/** Shared look for every "nothing here" state (empty library, empty folder, no search matches) -- a muted icon above the message, instead of bare centered text. */
+@Composable
+private fun EmptyStateMessage(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, contentDescription = null, tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(text, color = Color.Gray, fontSize = 14.sp, textAlign = TextAlign.Center)
+    }
+}
+
 @Composable
 fun PermissionRequiredCard(onRequestPermission: () -> Unit) {
     Column(
@@ -444,11 +460,9 @@ fun ContinueReadingContent(
         when {
             comics.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
+                    EmptyStateMessage(
+                        icon = Icons.AutoMirrored.Filled.MenuBook,
                         text = "No reading history yet.\nOpen a comic from Storage or Google Drive to see it here.",
-                        color = Color.Gray,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
                         modifier = Modifier.padding(32.dp)
                     )
                 }
@@ -602,10 +616,14 @@ fun FormatFilterRow(
             modifier = Modifier.weight(1f)
         ) {
             items(ComicFormat.entries) { format ->
+                val isSelected = format in selectedFormats
                 FilterChip(
-                    selected = format in selectedFormats,
+                    selected = isSelected,
                     onClick = { onFormatToggle(format) },
-                    label = { Text(format.name) }
+                    label = { Text(format.name) },
+                    leadingIcon = if (isSelected) {
+                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    } else null
                 )
             }
         }
@@ -650,6 +668,7 @@ fun DriveContent(
 ) {
     var favoriteDialogTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showFavoritesSheet by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.driveConnectionVersion) {
         if (state.isDriveConnected && state.driveBreadcrumbs.isEmpty()) {
@@ -671,19 +690,31 @@ fun DriveContent(
                     text = "Connected" + (state.driveAccountEmail?.let { " as $it" } ?: ""),
                     color = Color.Gray,
                     fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = { showFavoritesSheet = true }) {
                     Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
                 }
-                TextButton(onClick = onClearCache) {
-                    Text("Clear cache")
-                }
-                TextButton(onClick = onSwitchDriveAccount) {
-                    Text("Switch Account")
-                }
-                TextButton(onClick = onDisconnectDrive) {
-                    Text("Disconnect")
+                Box {
+                    IconButton(onClick = { showOverflowMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More Drive actions", tint = MaterialTheme.colorScheme.secondary)
+                    }
+                    DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Clear cache") },
+                            onClick = { showOverflowMenu = false; onClearCache() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Switch Account") },
+                            onClick = { showOverflowMenu = false; onSwitchDriveAccount() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Disconnect") },
+                            onClick = { showOverflowMenu = false; onDisconnectDrive() }
+                        )
+                    }
                 }
             } else {
                 Text(
@@ -829,7 +860,13 @@ private fun DriveComicDownloadAction(
     }
 }
 
-/** Same idea as [DriveComicDownloadAction] but for a folder row: downloads every comic file directly inside it. No delete state -- clearing cache is a separate, explicit "Clear cache" action, not per-folder. */
+/**
+ * Folder row's "download everything inside" action. A folder row already carries a favorite star
+ * and a navigate-in arrow -- rather than adding a THIRD always-visible icon, downloading (a rarer,
+ * heavier action than just browsing) lives behind a small overflow menu, so the row's resting
+ * state stays uncluttered. While a download is actually running, the menu icon is replaced by a
+ * spinner so that progress is still visible without opening anything.
+ */
 @Composable
 private fun DriveFolderDownloadAction(isDownloading: Boolean, onDownload: () -> Unit) {
     if (isDownloading) {
@@ -841,8 +878,18 @@ private fun DriveFolderDownloadAction(isDownloading: Boolean, onDownload: () -> 
             )
         }
     } else {
-        IconButton(onClick = onDownload, modifier = Modifier.size(32.dp)) {
-            Icon(Icons.Default.Download, contentDescription = "Download all files in this folder", tint = MaterialTheme.colorScheme.secondary)
+        var expanded by remember { mutableStateOf(false) }
+        Box {
+            IconButton(onClick = { expanded = true }, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Folder actions", tint = Color.Gray)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Download all files in this folder") },
+                    leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
+                    onClick = { expanded = false; onDownload() }
+                )
+            }
         }
     }
 }
@@ -997,11 +1044,7 @@ private fun DriveFolderBrowser(
                     }
                 }
                 searchResults.isNullOrEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "No matches in this folder or its subfolders.",
-                        color = Color.Gray,
-                        fontSize = 14.sp
-                    )
+                    EmptyStateMessage(icon = Icons.Default.SearchOff, text = "No matches in this folder or its subfolders.")
                 }
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(1),
@@ -1069,11 +1112,7 @@ private fun DriveFolderBrowser(
         }
         entries.isEmpty() -> {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "This folder is empty.",
-                    color = Color.Gray,
-                    fontSize = 14.sp
-                )
+                EmptyStateMessage(icon = Icons.Default.FolderOpen, text = "This folder is empty.")
             }
         }
         else -> {
@@ -1495,11 +1534,9 @@ fun LocalFilesContent(
                         CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     }
                     searchResults.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
+                        EmptyStateMessage(
+                            icon = Icons.Default.SearchOff,
                             text = "No matches in this folder or its subfolders.",
-                            color = Color.Gray,
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center,
                             modifier = Modifier.padding(32.dp)
                         )
                     }
@@ -1546,11 +1583,9 @@ fun LocalFilesContent(
             }
             entries.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
+                    EmptyStateMessage(
+                        icon = Icons.Default.FolderOpen,
                         text = "This folder is empty.",
-                        color = Color.Gray,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
                         modifier = Modifier.padding(32.dp)
                     )
                 }
