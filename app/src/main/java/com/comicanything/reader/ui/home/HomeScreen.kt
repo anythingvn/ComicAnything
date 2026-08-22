@@ -246,7 +246,7 @@ fun HomeScreen(
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    label = { Text("Jump to Folder") },
+                    label = { Text("Go to Folder") },
                     selected = homeScreenState.selectedTab == 2,
                     onClick = { homeScreenState.selectedTab = 2 }
                 )
@@ -1209,7 +1209,7 @@ fun JumpToFolderContent(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Jump to a Drive folder",
+                    text = "Go to a Drive folder",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp
@@ -1250,8 +1250,15 @@ fun JumpToFolderContent(
                 onValueChange = onInputChange,
                 label = { Text("Drive folder URL or ID") },
                 trailingIcon = {
-                    IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
-                        Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (input.isNotEmpty()) {
+                            IconButton(onClick = { onInputChange("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+                            }
+                        }
+                        IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
+                            Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
