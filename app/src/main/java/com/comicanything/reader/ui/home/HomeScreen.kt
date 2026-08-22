@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SearchOff
@@ -47,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
@@ -55,6 +57,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import com.comicanything.reader.R
 import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.repository.DriveEntry
@@ -142,6 +146,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var driveUrlInput by remember { mutableStateOf("") }
+    var showAboutDialog by remember { mutableStateOf(false) }
 
     // Debounces the recursive Drive/Local tree search behind the query field: a live search call
     // per keystroke would hammer the Drive API (a network round trip per folder visited) and
@@ -218,6 +223,9 @@ fun HomeScreen(
                             Icon(Icons.Default.Close, contentDescription = "Close search")
                         }
                     } else {
+                        IconButton(onClick = { showAboutDialog = true }) {
+                            Icon(Icons.Default.Info, contentDescription = "About")
+                        }
                         IconButton(onClick = { homeScreenState.isSearchActive = true }) {
                             Icon(Icons.Default.Search, contentDescription = "Search")
                         }
@@ -347,6 +355,57 @@ fun HomeScreen(
             }
         }
     }
+
+    if (showAboutDialog) {
+        AboutDialog(onDismiss = { showAboutDialog = false })
+    }
+}
+
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Image(
+                    painter = painterResource(R.mipmap.ic_launcher),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "ComicAnything",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "This is personal software.\nThe user assumes full responsibility for any copyright-related issues.",
+                    color = Color.Gray,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                Text(
+                    text = "© Anythingvn",
+                    color = Color.DarkGray,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    }
 }
 
 /** Shared look for every "nothing here" state (empty library, empty folder, no search matches) -- a muted icon above the message, instead of bare centered text. */
@@ -461,11 +520,19 @@ fun ContinueReadingContent(
         when {
             comics.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    EmptyStateMessage(
-                        icon = Icons.AutoMirrored.Filled.MenuBook,
-                        text = "No reading history yet.\nOpen a comic from Storage or Google Drive to see it here.",
-                        modifier = Modifier.padding(32.dp)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        EmptyStateMessage(
+                            icon = Icons.AutoMirrored.Filled.MenuBook,
+                            text = "No reading history yet.\nOpen a comic from Storage or Google Drive to see it here.",
+                            modifier = Modifier.padding(32.dp)
+                        )
+                        Text(
+                            text = "The gift for my friend from Anythingvn.",
+                            color = Color.DarkGray,
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
             isGridLayout -> {
