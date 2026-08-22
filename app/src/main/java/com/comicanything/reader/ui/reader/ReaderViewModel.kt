@@ -409,7 +409,17 @@ class ReaderViewModel @JvmOverloads constructor(
 
     fun loadSavedDriveLinks() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(savedDriveLinks = savedDriveLinkRepo().getAll())
+            // The suspending call is resolved to a local BEFORE building the .copy() -- calling
+            // `_uiState.value.copy(savedDriveLinks = savedDriveLinkRepo().getAll())` directly reads
+            // `_uiState.value` (the copy receiver) BEFORE the suspend argument runs, per Kotlin's
+            // left-to-right evaluation order. If ANY other coroutine updates `_uiState.value` while
+            // this call is suspended awaiting the DataStore read (confirmed on-device: this races
+            // against onResume()'s permission check on cold start, since this is launched from
+            // onCreate() before permission state is known), resuming here would overwrite that
+            // update with the stale pre-suspension snapshot -- reintroducing the exact
+            // "settings/permission silently revert" bug this session fixed elsewhere.
+            val links = savedDriveLinkRepo().getAll()
+            _uiState.value = _uiState.value.copy(savedDriveLinks = links)
         }
     }
 
