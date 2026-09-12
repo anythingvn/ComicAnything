@@ -20,6 +20,8 @@ import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
 import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.DriveFileCache
+import com.comicanything.reader.data.repository.DriveLibraryEntry
+import com.comicanything.reader.data.repository.DriveLibraryRepository
 import com.comicanything.reader.data.repository.DriveSearchHit
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.LocalEntry
@@ -177,6 +179,10 @@ class ReaderViewModel @JvmOverloads constructor(
     // mocked" in plain JVM unit tests) even for the ~50 existing test cases that never touch
     // reader settings at all. Wrapping it as a supplier defers that construction to actual use.
     private val settingsRepo: () -> ReaderSettingsRepository = { ReaderSettingsRepository(application) },
+    // Lazy supplier for the same reason as settingsRepo above. Remembers the title/format/cover of
+    // every Drive comic that's actually been opened, so it can be redisplayed in Recent later --
+    // see [DriveLibraryRepository]'s doc comment for why local comics don't need this.
+    private val driveLibraryRepo: () -> DriveLibraryRepository = { DriveLibraryRepository(application) },
     // Backing state for the token-push mechanism (see [updateDriveAccessToken]), boxed in an
     // AtomicReference rather than exposed as a plain `var` property. A plain
     // `private var pushedDriveAccessToken: String? = null` constructor parameter was tried first,
@@ -325,7 +331,29 @@ class ReaderViewModel @JvmOverloads constructor(
                     }
                 } ?: comic
             }
-            _uiState.value = _uiState.value.copy(libraryComics = merged, isScanningLocal = false)
+            // Drive comics aren't found by scanning storage, so they're rediscovered from
+            // driveLibraryRepo instead -- and only included once they actually have saved
+            // progress (persisted[id] != null), i.e. once they've been opened at least once.
+            // This keeps a downloaded-but-never-opened comic out of Recent, and means deleting
+            // its cached file later has no effect here -- opening it again just re-streams from
+            // Drive, exactly like any other Drive comic.
+            val driveComics = driveLibraryRepo().getAll().mapNotNull { (id, entry) ->
+                val progress = persisted[id] ?: return@mapNotNull null
+                ComicItem(
+                    id = id,
+                    title = entry.title,
+                    pathOrUrl = entry.pathOrUrl,
+                    source = ComicSource.GOOGLE_DRIVE,
+                    format = entry.format,
+                    coverUrl = entry.coverUrl,
+                    currentPage = progress.currentPage,
+                    totalPages = progress.totalPages,
+                    progressPercentage = progress.progressPercentage,
+                    lastReadTimestamp = progress.lastReadTimestamp,
+                    isFavorite = progress.isFavorite
+                )
+            }
+            _uiState.value = _uiState.value.copy(libraryComics = merged + driveComics, isScanningLocal = false)
         }
     }
 
@@ -1062,6 +1090,7 @@ class ReaderViewModel @JvmOverloads constructor(
         debounceJob?.cancel()
         viewModelScope.launch(NonCancellable) {
             progressRepo.save(comic.id, comic.toReadingProgress())
+            persistDriveLibraryEntryIfNeeded(comic)
         }
     }
 
@@ -1070,7 +1099,27 @@ class ReaderViewModel @JvmOverloads constructor(
         debounceJob = viewModelScope.launch {
             delay(1_500)
             progressRepo.save(comic.id, comic.toReadingProgress())
+            persistDriveLibraryEntryIfNeeded(comic)
         }
+    }
+
+    /**
+     * Remembers [comic]'s title/format/cover the moment its reading progress is saved, so a Drive
+     * comic that's been opened can still be found and redisplayed in Recent later -- see
+     * [DriveLibraryRepository]'s doc comment. A no-op for local comics, which are rediscovered by
+     * scanning device storage instead.
+     */
+    private suspend fun persistDriveLibraryEntryIfNeeded(comic: ComicItem) {
+        if (comic.source != ComicSource.GOOGLE_DRIVE) return
+        driveLibraryRepo().save(
+            comic.id,
+            DriveLibraryEntry(
+                title = comic.title,
+                pathOrUrl = comic.pathOrUrl,
+                format = comic.format,
+                coverUrl = comic.coverUrl
+            )
+        )
     }
 
     fun toggleControls() {

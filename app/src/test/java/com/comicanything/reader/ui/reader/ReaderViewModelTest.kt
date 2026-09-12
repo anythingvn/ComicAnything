@@ -15,6 +15,8 @@ import com.comicanything.reader.data.model.ReadingMode
 import com.comicanything.reader.data.repository.DriveApiException
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
+import com.comicanything.reader.data.repository.DriveLibraryEntry
+import com.comicanything.reader.data.repository.DriveLibraryRepository
 import com.comicanything.reader.data.repository.DriveEntry
 import com.comicanything.reader.data.repository.LocalEntry
 import com.comicanything.reader.data.repository.LocalFileRepository
@@ -59,6 +61,14 @@ class ReaderViewModelTest {
     // instance explicitly instead of relying on the default.
     private lateinit var connectionRepo: DriveConnectionRepository
 
+    // Same hazard as progressRepo/connectionRepo above. Unlike those two, ReaderViewModel wraps
+    // its default as a `() -> DriveLibraryRepository` supplier (see its doc comment) -- but
+    // loadLocalLibrary() (called from setPermissionGranted(true), used pervasively below) now
+    // unconditionally calls it, not just tests that exercise Drive comics specifically. So this
+    // needs a temp-file-backed instance passed at every ReaderViewModel(...) call site, same as
+    // progressRepo/connectionRepo, rather than only where a test actually needs it.
+    private lateinit var driveLibraryRepo: DriveLibraryRepository
+
     // Same hazard as progressRepo/connectionRepo above, but ReaderViewModel wraps its default as a
     // `() -> SavedDriveLinkRepository` supplier instead of constructing eagerly (see its doc
     // comment), so most tests never need this at all -- only ones that exercise the Jump to
@@ -91,6 +101,12 @@ class ReaderViewModelTest {
         )
         connectionRepo = DriveConnectionRepository(connectionDataStore, ioDispatcher = Dispatchers.Unconfined)
 
+        val driveLibraryDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+            produceFile = { File(tempFolder.root, "test-drive-library-${System.nanoTime()}.preferences_pb") }
+        )
+        driveLibraryRepo = DriveLibraryRepository(driveLibraryDataStore, ioDispatcher = Dispatchers.Unconfined)
+
         val savedLinksDataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
             scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
             produceFile = { File(tempFolder.root, "test-saved-links-${System.nanoTime()}.preferences_pb") }
@@ -108,7 +124,7 @@ class ReaderViewModelTest {
     fun `granting permission after being denied triggers a library load`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
 
         assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
 
@@ -123,7 +139,7 @@ class ReaderViewModelTest {
     fun `revoking permission clears the library`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
         assertEquals(1, viewModel.uiState.value.libraryComics.size)
@@ -138,7 +154,7 @@ class ReaderViewModelTest {
     @Test
     fun `granting permission when already granted does not reload`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
 
@@ -152,7 +168,7 @@ class ReaderViewModelTest {
     @Test
     fun `refreshLibrary re-scans and picks up newly added files when permission is granted`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
 
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
@@ -169,7 +185,7 @@ class ReaderViewModelTest {
     fun `refreshLibrary is a no-op when permission has never been granted`() = runTest {
         File(tempFolder.newFolder("Comics"), "batman.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
 
         viewModel.refreshLibrary()
         advanceUntilIdle()
@@ -181,7 +197,7 @@ class ReaderViewModelTest {
     @Test
     fun `closeComic clears the active comic`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         val comic = ComicItem(
             id = "1",
             title = "Test Comic",
@@ -213,7 +229,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             comicFileResolver = { _, _, _ -> driveFile }
         )
         val comic = ComicItem(
@@ -247,7 +263,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             comicFileResolver = { _, _, _ -> throw DriveApiException("Not connected to Google Drive") }
         )
         val comic = ComicItem(
@@ -273,7 +289,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { driveAccessTokenCalls++; "should-not-be-used" }
         )
         val comic = ComicItem(
@@ -302,7 +318,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries }
         )
@@ -324,7 +340,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> throw DriveApiException("Couldn't reach Google Drive -- check your connection") }
         )
@@ -344,7 +360,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> throw IllegalStateException("boom") }
         )
@@ -372,7 +388,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             // Deliberately NOT overriding driveAccessToken here -- its default reads
             // pushedDriveAccessToken, which is exactly what updateDriveAccessToken() writes to.
             // Overriding it with a fixed lambda (like the other tests in this file do) would
@@ -406,7 +422,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             comicFileResolver = { _, _, _ -> resolverCalls++; File(tempFolder.root, "fake") }
         )
         val comic = ComicItem(id = "d1", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
@@ -428,7 +444,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             comicFileResolver = { _, _, _ -> resolverCalls++; File(tempFolder.root, "fake") }
         )
         val comic = ComicItem(id = "d2", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
@@ -449,7 +465,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             comicFileResolver = { _, _, _ -> throw DriveApiException("network error") }
         )
         val comic = ComicItem(id = "d3", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
@@ -470,7 +486,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveFileCache = { cache },
             comicFileResolver = { comic, driveCache, _ -> driveCache().download(comic.id) { it.writeText("data") } }
         )
@@ -503,7 +519,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> folderEntries },
             comicFileResolver = { comic, _, _ -> resolverCalls.add(comic.id); File(tempFolder.root, "fake") }
@@ -526,7 +542,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveFileCache = { cache },
             comicFileResolver = { comic, driveCache, _ -> driveCache().download(comic.id) { it.writeText("data") } }
         )
@@ -556,7 +572,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { null }
         )
 
@@ -575,7 +591,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { null } // forces a fast, deterministic driveError instead of a real network call
         )
         viewModel.navigateDriveFolder("root", "My Drive")
@@ -600,7 +616,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { null }
         )
         viewModel.navigateDriveFolder("root", "My Drive")
@@ -629,7 +645,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> fakeHits }
@@ -653,7 +669,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> callCount++; emptyList() }
@@ -679,7 +695,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> throw DriveApiException("token expired") }
@@ -703,7 +719,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { null },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> emptyList() }
@@ -727,7 +743,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries },
             searchDriveFolderTree = { _, _, _ -> listOf(com.comicanything.reader.data.repository.DriveSearchHit(DriveEntry.Folder("sub1", "Comics"), emptyList())) }
@@ -755,7 +771,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries }
@@ -780,7 +796,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else jumpEntries }
@@ -806,7 +822,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { folderId, _ -> if (folderId == "nested") nestedEntries else emptyList() }
@@ -831,7 +847,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
@@ -857,7 +873,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries },
@@ -885,7 +901,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { null },
             fetchDriveFolderContents = { _, _ -> emptyList() }
@@ -906,7 +922,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() }
@@ -928,7 +944,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() }
@@ -952,7 +968,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() }
@@ -976,7 +992,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else emptyList() }
@@ -1007,7 +1023,7 @@ class ReaderViewModelTest {
         val subfolder = tempFolder.newFolder("Comics")
         File(subfolder, "test.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
 
         viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
         advanceUntilIdle()
@@ -1028,7 +1044,7 @@ class ReaderViewModelTest {
         val comics = tempFolder.newFolder("Comics")
         val manga = File(comics, "Manga").apply { mkdir() }
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
         advanceUntilIdle()
         viewModel.navigateLocalFolder(comics.absolutePath, "Comics")
@@ -1048,7 +1064,7 @@ class ReaderViewModelTest {
         val nested = tempFolder.newFolder("Comics", "Manga")
         File(nested, "solo_leveling.cbz").writeText("fake")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
         advanceUntilIdle()
 
@@ -1065,7 +1081,7 @@ class ReaderViewModelTest {
     fun `searchLocalTree with a blank query clears results instead of searching`() = runTest {
         tempFolder.newFolder("Comics")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
         advanceUntilIdle()
         viewModel.searchLocalTree("comics")
@@ -1082,7 +1098,7 @@ class ReaderViewModelTest {
     fun `navigateLocalToBreadcrumbs replaces the trail, lists that folder, and clears the search`() = runTest {
         val comics = tempFolder.newFolder("Comics")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.navigateLocalFolder(tempFolder.root.absolutePath, "Internal Storage")
         advanceUntilIdle()
         viewModel.searchLocalTree("comics")
@@ -1102,7 +1118,7 @@ class ReaderViewModelTest {
     fun `revoking storage permission clears local browse state`() = runTest {
         val subfolder = tempFolder.newFolder("Comics")
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         viewModel.setPermissionGranted(true)
         viewModel.navigateLocalFolder(subfolder.absolutePath, "Comics")
         advanceUntilIdle()
@@ -1117,7 +1133,7 @@ class ReaderViewModelTest {
     @Test
     fun `loadPageBitmap returns Failed when no comic is open`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
 
         val result = viewModel.loadPageBitmap(1)
 
@@ -1127,7 +1143,7 @@ class ReaderViewModelTest {
     @Test
     fun `pageSourceGeneration increments each time a comic successfully opens`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         val comicFile = File(tempFolder.newFolder("Comics"), "test.cbz")
         java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
             zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
@@ -1176,7 +1192,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             localRepo = localRepo,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.setPermissionGranted(true)
@@ -1195,7 +1211,7 @@ class ReaderViewModelTest {
     fun `loadLocalLibrary leaves scan defaults untouched for a comic with no persisted progress`() = runTest {
         File(tempFolder.newFolder("Comics"), "new_comic.cbz").writeText("fake")
         val localRepo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
 
         viewModel.setPermissionGranted(true)
         advanceUntilIdle()
@@ -1204,6 +1220,114 @@ class ReaderViewModelTest {
         assertEquals(1, comic.currentPage)
         assertEquals(1, comic.totalPages)
         assertFalse(comic.isFavorite)
+    }
+
+    @Test
+    fun `loadLocalLibrary includes a Drive comic that has been opened before`() = runTest {
+        driveLibraryRepo.save(
+            "drive-comic",
+            DriveLibraryEntry(title = "Kotaro V21", pathOrUrl = "https://example.com/abc", format = ComicFormat.PDF, coverUrl = "https://example.com/cover.png")
+        )
+        progressRepo.save(
+            "drive-comic",
+            ReadingProgress(currentPage = 12, totalPages = 190, progressPercentage = 0.06f, lastReadTimestamp = 555L, isFavorite = false)
+        )
+        val localRepo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
+
+        viewModel.setPermissionGranted(true)
+        advanceUntilIdle()
+
+        val comic = viewModel.uiState.value.libraryComics.single()
+        assertEquals("drive-comic", comic.id)
+        assertEquals("Kotaro V21", comic.title)
+        assertEquals(ComicSource.GOOGLE_DRIVE, comic.source)
+        assertEquals(ComicFormat.PDF, comic.format)
+        assertEquals("https://example.com/cover.png", comic.coverUrl)
+        assertEquals(12, comic.currentPage)
+        assertEquals(190, comic.totalPages)
+    }
+
+    @Test
+    fun `loadLocalLibrary excludes a downloaded Drive comic that has never been opened`() = runTest {
+        // A comicId present in driveLibraryRepo with no matching progressRepo entry represents a
+        // comic that's been downloaded (see DriveDownloadCoordinator) but never actually opened --
+        // it must stay out of Recent until it's read at least once.
+        driveLibraryRepo.save(
+            "unread-drive-comic",
+            DriveLibraryEntry(title = "Unread", pathOrUrl = "https://example.com/xyz", format = ComicFormat.PDF, coverUrl = null)
+        )
+        val localRepo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = localRepo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
+
+        viewModel.setPermissionGranted(true)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.libraryComics.isEmpty())
+    }
+
+    @Test
+    fun `opening a Drive comic persists its identity to driveLibraryRepo`() = runTest {
+        val comicFile = File(tempFolder.newFolder("cbz"), "test.cbz")
+        java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zos.write(byteArrayOf(1, 2, 3))
+            zos.closeEntry()
+        }
+        val comic = ComicItem(
+            id = "drive-open-comic",
+            title = "Kotaro V22",
+            pathOrUrl = "https://example.com/def",
+            source = ComicSource.GOOGLE_DRIVE,
+            format = ComicFormat.CBZ,
+            coverUrl = "https://example.com/cover2.png"
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveLibraryRepo = { driveLibraryRepo },
+            comicFileResolver = { _, _, _ -> comicFile }
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        val saved = driveLibraryRepo.getAll()["drive-open-comic"]
+        assertEquals("Kotaro V22", saved?.title)
+        assertEquals("https://example.com/def", saved?.pathOrUrl)
+        assertEquals(ComicFormat.CBZ, saved?.format)
+        assertEquals("https://example.com/cover2.png", saved?.coverUrl)
+    }
+
+    @Test
+    fun `opening a local comic does not write anything to driveLibraryRepo`() = runTest {
+        val comicFile = File(tempFolder.newFolder("cbz-local"), "test.cbz")
+        java.util.zip.ZipOutputStream(comicFile.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("page1.jpg"))
+            zos.write(byteArrayOf(1, 2, 3))
+            zos.closeEntry()
+        }
+        val comic = ComicItem(
+            id = "local-open-comic",
+            title = "Local",
+            pathOrUrl = comicFile.absolutePath,
+            source = ComicSource.LOCAL,
+            format = ComicFormat.CBZ
+        )
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo,
+            driveLibraryRepo = { driveLibraryRepo }
+        )
+
+        viewModel.openComic(comic)
+        advanceUntilIdle()
+
+        assertTrue(driveLibraryRepo.getAll().isEmpty())
     }
 
     @Test
@@ -1236,7 +1360,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.openComic(comic)
@@ -1265,7 +1389,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -1319,7 +1443,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -1352,7 +1476,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -1392,7 +1516,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.toggleFavorite(comic)
@@ -1420,7 +1544,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.loadDriveConnectionState()
@@ -1441,7 +1565,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.loadDriveConnectionState()
@@ -1462,7 +1586,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.onDriveAuthorized("reader@example.com")
@@ -1484,7 +1608,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries }
         )
@@ -1520,7 +1644,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.onDriveAuthorized(null)
@@ -1541,7 +1665,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
         viewModel.onDriveAuthorized("reader@example.com")
         advanceUntilIdle()
@@ -1567,7 +1691,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
         viewModel.onDriveAuthorized("reader@example.com")
         advanceUntilIdle()
@@ -1598,7 +1722,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
 
         viewModel.onDriveSilentCheckSucceeded()
@@ -1619,7 +1743,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
         )
         viewModel.onDriveAuthorized("reader@example.com")
         advanceUntilIdle()
@@ -1642,7 +1766,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             thumbnailDecoder = { null }
         )
         val comic = ComicItem(
@@ -1667,7 +1791,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             thumbnailDecoder = { decodeCallCount++; null }
         )
         val comic = ComicItem(
@@ -1694,7 +1818,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             thumbnailDecoder = { decodeCallCount++; null }
         )
         val comicA = ComicItem(id = "a", title = "A", pathOrUrl = "/fake/a.cbz", source = ComicSource.LOCAL, format = ComicFormat.CBZ)
@@ -1718,7 +1842,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> fakeBook },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1745,7 +1869,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> null },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1775,7 +1899,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> fakeBook },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1818,7 +1942,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> fakeBook },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1843,7 +1967,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> fakeBook },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1879,7 +2003,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> fakeBook },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1938,7 +2062,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             epubExtractor = { _, _ -> fakeBook },
             epubCacheRoot = { tempFolder.newFolder("epub-cache-${System.nanoTime()}") }
         )
@@ -1990,7 +2114,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             cbrCacheRoot = { cbrExtractionRoot }
         )
 
@@ -2016,7 +2140,7 @@ class ReaderViewModelTest {
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             cbrCacheRoot = { cbrCacheRootCallCount++; tempFolder.newFolder("should-not-be-used-${System.nanoTime()}") }
         )
         val comic = ComicItem(
@@ -2051,7 +2175,7 @@ class ReaderViewModelTest {
     @Test
     fun `setPage clamps below 1 to page 1`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(3).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -2065,7 +2189,7 @@ class ReaderViewModelTest {
     @Test
     fun `setPage clamps above totalPages to the last page`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(3).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -2079,7 +2203,7 @@ class ReaderViewModelTest {
     @Test
     fun `setPage accepts an in-range value unchanged`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(3).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -2093,7 +2217,7 @@ class ReaderViewModelTest {
     @Test
     fun `setCurrentPageIndicator updates the active comic's progress fields`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, ioDispatcher = Dispatchers.Unconfined, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         val comic = ComicItem(id = "1", title = "Test", pathOrUrl = buildCbz(4).absolutePath, source = ComicSource.LOCAL, format = ComicFormat.CBZ)
         viewModel.openComic(comic)
         advanceUntilIdle()
@@ -2107,7 +2231,7 @@ class ReaderViewModelTest {
     @Test
     fun `setReadingMode updates readingMode for every mode`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
 
         for (mode in ReadingMode.entries) {
             viewModel.setReadingMode(mode)
@@ -2118,7 +2242,7 @@ class ReaderViewModelTest {
     @Test
     fun `setFilterMode updates filterMode for every mode`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
 
         for (mode in ColorFilterMode.entries) {
             viewModel.setFilterMode(mode)
@@ -2129,7 +2253,7 @@ class ReaderViewModelTest {
     @Test
     fun `toggleControls flips isControlsVisible each call`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo)
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo })
         assertTrue(viewModel.uiState.value.isControlsVisible)
 
         viewModel.toggleControls()
@@ -2142,7 +2266,7 @@ class ReaderViewModelTest {
     @Test
     fun `toggleAutoCrop flips autoCropMargins each call`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
         assertTrue(viewModel.uiState.value.autoCropMargins)
 
         viewModel.toggleAutoCrop()
@@ -2155,7 +2279,7 @@ class ReaderViewModelTest {
     @Test
     fun `toggleGridLayout flips isGridLayout each call`() {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
+        val viewModel = ReaderViewModel(application = fakeApplication, localRepo = repo, progressRepo = progressRepo, connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }, ioDispatcher = Dispatchers.Unconfined, settingsRepo = { settingsRepo })
         assertTrue(viewModel.uiState.value.isGridLayout)
 
         viewModel.toggleGridLayout()
@@ -2177,7 +2301,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             localRepo = repo,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             ioDispatcher = Dispatchers.Unconfined,
             settingsRepo = { settingsRepo }
         )
@@ -2194,7 +2318,7 @@ class ReaderViewModelTest {
             application = fakeApplication,
             localRepo = repo,
             progressRepo = progressRepo,
-            connectionRepo = connectionRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             ioDispatcher = Dispatchers.Unconfined,
             settingsRepo = { settingsRepo }
         )
