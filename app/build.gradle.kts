@@ -41,8 +41,8 @@ android {
         // a re-upload with a versionCode <= the last published one — it does not need to track
         // versionName in any particular way, just monotonically increase). Bump both together
         // when cutting a release: e.g. 1.0.0 -> 1.1.0 for a feature release is versionCode 1 -> 2.
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
