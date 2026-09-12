@@ -892,7 +892,9 @@ fun DriveContent(
                         onEdit = { link ->
                             showFavoritesSheet = false
                             favoriteDialogTarget = link.folderId to (link.customName ?: "")
-                        }
+                        },
+                        downloadingFolderIds = state.driveDownloadingFolderIds,
+                        onDownloadFolder = onDownloadFolder
                     )
                 }
             }
@@ -1379,7 +1381,9 @@ fun JumpToFolderContent(
                     links = state.savedDriveLinks,
                     onOpen = onOpenSavedLink,
                     onRemove = onRemoveSavedLink,
-                    onEdit = { link -> favoriteDialogTarget = link.folderId to (link.customName ?: "") }
+                    onEdit = { link -> favoriteDialogTarget = link.folderId to (link.customName ?: "") },
+                    downloadingFolderIds = state.driveDownloadingFolderIds,
+                    onDownloadFolder = onDownloadFolder
                 )
             } else {
                 DriveFolderBrowser(
@@ -1466,7 +1470,9 @@ fun JumpToFolderContent(
                         onEdit = { link ->
                             showFavoritesSheet = false
                             favoriteDialogTarget = link.folderId to (link.customName ?: "")
-                        }
+                        },
+                        downloadingFolderIds = state.driveDownloadingFolderIds,
+                        onDownloadFolder = onDownloadFolder
                     )
                 }
             }
@@ -1479,7 +1485,9 @@ private fun SavedDriveLinksList(
     links: List<SavedDriveLink>,
     onOpen: (String) -> Unit,
     onRemove: (String) -> Unit,
-    onEdit: (SavedDriveLink) -> Unit
+    onEdit: (SavedDriveLink) -> Unit,
+    downloadingFolderIds: Set<String>,
+    onDownloadFolder: (String) -> Unit
 ) {
     val favorites = links.filter { it.isFavorite }.sortedBy { (it.customName ?: it.folderId).lowercase() }
     val recents = links.filter { !it.isFavorite }.sortedByDescending { it.lastUsedTimestamp }
@@ -1489,13 +1497,17 @@ private fun SavedDriveLinksList(
             item {
                 Text("Favorites", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
             }
-            items(favorites) { link -> SavedDriveLinkRow(link, onOpen, onRemove, onEdit) }
+            items(favorites) { link ->
+                SavedDriveLinkRow(link, onOpen, onRemove, onEdit, downloadingFolderIds, onDownloadFolder)
+            }
         }
         if (recents.isNotEmpty()) {
             item {
                 Text("Recent", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
             }
-            items(recents) { link -> SavedDriveLinkRow(link, onOpen, onRemove, onEdit) }
+            items(recents) { link ->
+                SavedDriveLinkRow(link, onOpen, onRemove, onEdit, downloadingFolderIds, onDownloadFolder)
+            }
         }
     }
 }
@@ -1505,7 +1517,9 @@ private fun SavedDriveLinkRow(
     link: SavedDriveLink,
     onOpen: (String) -> Unit,
     onRemove: (String) -> Unit,
-    onEdit: (SavedDriveLink) -> Unit
+    onEdit: (SavedDriveLink) -> Unit,
+    downloadingFolderIds: Set<String>,
+    onDownloadFolder: (String) -> Unit
 ) {
     ListItem(
         headlineContent = { Text(link.customName ?: link.folderId, color = Color.White, fontWeight = FontWeight.Bold) },
@@ -1519,6 +1533,10 @@ private fun SavedDriveLinkRow(
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (link.isFavorite) {
+                    DriveFolderDownloadAction(
+                        isDownloading = link.folderId in downloadingFolderIds,
+                        onDownload = { onDownloadFolder(link.folderId) }
+                    )
                     IconButton(onClick = { onEdit(link) }) {
                         Icon(Icons.Default.Edit, contentDescription = "Rename", tint = Color.Gray)
                     }
