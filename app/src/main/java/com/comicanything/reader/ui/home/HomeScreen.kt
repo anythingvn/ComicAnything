@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -1010,6 +1011,14 @@ private fun DriveFolderBrowser(
     // no parent folder left to go up to, instead of leaving back a no-op at that point.
     onHome: (() -> Unit)? = null
 ) {
+    // Keyed by folder id and remembered above the isLoading/error/list `when` below, so it
+    // survives that block swapping away from the grid and back on every navigation (including
+    // navigating BACK UP, which re-fetches from the network just like navigating in does) --
+    // without this, a LazyVerticalGrid's own default scroll state would be torn down and
+    // recreated at the top on every folder visit. Reusing the same LazyGridState instance for a
+    // folder id already seen this session instead restores exactly where the user had scrolled to.
+    val gridStates = remember { mutableMapOf<String, LazyGridState>() }
+
     if (breadcrumbs.isNotEmpty()) {
         BackHandler(enabled = breadcrumbs.size > 1 || onHome != null) {
             if (breadcrumbs.size > 1) onNavigateUp(breadcrumbs.size - 2) else onHome?.invoke()
@@ -1185,6 +1194,7 @@ private fun DriveFolderBrowser(
         }
         else -> {
             LazyVerticalGrid(
+                state = gridStates.getOrPut(breadcrumbs.last().folderId) { LazyGridState() },
                 columns = GridCells.Fixed(1),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1543,6 +1553,12 @@ fun LocalFilesContent(
         return
     }
 
+    // See the matching comment in DriveFolderBrowser -- keyed by folder path here since local
+    // folders don't have an id, but for the same reason: fetchCurrentLocalFolder() re-reads the
+    // directory (and flips isLoadingLocalFolder) on every navigation including navigating back up,
+    // which would otherwise reset an un-hoisted grid's scroll position to the top every time.
+    val gridStates = remember { mutableMapOf<String, LazyGridState>() }
+
     LaunchedEffect(state.hasStoragePermission) {
         if (state.hasStoragePermission && state.localBreadcrumbs.isEmpty()) {
             onNavigateFolder(LocalFileRepository.DEFAULT_ROOT, "Internal Storage")
@@ -1676,6 +1692,7 @@ fun LocalFilesContent(
             }
             else -> {
                 LazyVerticalGrid(
+                    state = gridStates.getOrPut(state.localBreadcrumbs.last().path) { LazyGridState() },
                     columns = GridCells.Fixed(1),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
