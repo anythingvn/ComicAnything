@@ -4,9 +4,11 @@ import android.Manifest
 import android.accounts.Account
 import android.accounts.AccountManager
 import android.content.ActivityNotFoundException
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -29,6 +31,7 @@ import com.comicanything.reader.ui.reader.EpubReaderScreen
 import com.comicanything.reader.ui.reader.ReaderScreen
 import com.comicanything.reader.ui.reader.ReaderViewModel
 import com.comicanything.reader.ui.theme.ComicAnythingTheme
+import com.comicanything.reader.service.ServiceBoundDriveDownloadCoordinator
 import com.comicanything.reader.util.StoragePermissions
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.ClearTokenRequest
@@ -50,7 +53,16 @@ class MainActivity : ComponentActivity() {
                 // reading the OLD (dead) instance's field forever, going permanently stale. Fresh
                 // tokens are now PUSHED into the ViewModel via updateDriveAccessToken() at each of
                 // the three places below that obtain one.
-                return ReaderViewModel(application) as T
+                //
+                // driveDownloadCoordinator is passed explicitly (rather than relying on
+                // ReaderViewModel's own default) so that "download for offline reading" actually
+                // runs on DriveDownloadService's foreground-service scope here in the real app --
+                // surviving the app being backgrounded or this Activity being destroyed -- instead
+                // of the plain viewModelScope-backed coordinator every unit test gets by default.
+                return ReaderViewModel(
+                    application,
+                    driveDownloadCoordinatorOverride = ServiceBoundDriveDownloadCoordinator(application)
+                ) as T
             }
         }
     }
@@ -58,6 +70,13 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> viewModel.setPermissionGranted(granted) }
+
+    // Notification permission is only relevant to the download-progress notification a background
+    // download shows -- there's nothing meaningful to do with the result (a denial just means that
+    // notification silently won't be shown; the download itself is unaffected), so no callback.
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {}
 
     private var lastAccessToken: String? = null
 
@@ -102,6 +121,7 @@ class MainActivity : ComponentActivity() {
         // here is enough -- no need to repeat this on every onResume().
         viewModel.loadReaderSettings()
         viewModel.loadSavedDriveLinks()
+        requestNotificationPermissionIfNeeded()
         setContent {
             ComicAnythingTheme {
                 Surface(
@@ -232,6 +252,21 @@ class MainActivity : ComponentActivity() {
                 // hasResolution()==true branch above, since that branch is a definitive
                 // "needs re-confirmation" signal and this one is not.)
             }
+    }
+
+    /**
+     * Asked once up front (rather than only right as a download starts) since download-triggering
+     * taps happen deep inside HomeScreen's Drive tab, several layers away from this Activity --
+     * asking here avoids threading a "request this permission" callback all the way through that
+     * UI just for a permission whose only effect is whether the download-progress notification is
+     * visible. Notifications don't require this permission before Android 13 (API 33).
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     private fun requestStoragePermission() {

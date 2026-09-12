@@ -31,6 +31,8 @@ import com.comicanything.reader.data.repository.ReadingProgressRepository
 import com.comicanything.reader.data.repository.SavedDriveLink
 import com.comicanything.reader.data.repository.SavedDriveLinkRepository
 import com.comicanything.reader.data.repository.resolveComicFile
+import com.comicanything.reader.service.DefaultDriveDownloadCoordinator
+import com.comicanything.reader.service.DriveDownloadCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -220,11 +222,47 @@ class ReaderViewModel @JvmOverloads constructor(
     // explicit lambda sidesteps that -- the maxDepth/fetchFolder defaults still apply underneath.
     private val searchDriveFolderTree: suspend (String, String, String) -> List<DriveSearchHit> =
         { folderId, query, token -> driveRepo.searchTree(folderId, query, token) },
-    private val searchLocalFolderTree: suspend (String, String) -> List<LocalEntry> = localRepo::searchTree
+    private val searchLocalFolderTree: suspend (String, String) -> List<LocalEntry> = localRepo::searchTree,
+    // Null (the default every existing test above still gets, since none of them pass this
+    // parameter) means "build the default viewModelScope-backed coordinator below" -- that default
+    // can't live directly in THIS parameter list since it needs `viewModelScope`, an extension
+    // property on `this`, which isn't available yet while primary-constructor parameter defaults
+    // are being evaluated (this@ReaderViewModel doesn't exist as a usable receiver until the
+    // AndroidViewModel(application) superclass call below completes). MainActivity's factory
+    // instead passes a real ServiceBoundDriveDownloadCoordinator here, which runs downloads on
+    // DriveDownloadService's own scope (independent of this ViewModel/Activity) so they can keep
+    // going -- with a visible progress notification -- after the app is backgrounded or this
+    // ViewModel is destroyed.
+    driveDownloadCoordinatorOverride: DriveDownloadCoordinator? = null
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
+
+    private val driveDownloadCoordinator: DriveDownloadCoordinator = driveDownloadCoordinatorOverride
+        ?: DefaultDriveDownloadCoordinator(
+            scope = viewModelScope,
+            driveFileCache = driveFileCache,
+            driveAccessToken = driveAccessToken,
+            comicFileResolver = comicFileResolver,
+            fetchFolderContents = fetchDriveFolderContents
+        )
+
+    init {
+        // Mirrors driveDownloadCoordinator's own state into the matching driveDownloadingIds/
+        // driveCachedIds/driveDownloadingFolderIds fields above -- kept as separate ReaderUiState
+        // fields (rather than exposing DriveDownloadState directly) so HomeScreen's existing
+        // contract doesn't change regardless of which coordinator is behind it.
+        viewModelScope.launch {
+            driveDownloadCoordinator.state.collect { s ->
+                _uiState.value = _uiState.value.copy(
+                    driveDownloadingIds = s.downloadingIds,
+                    driveCachedIds = s.cachedIds,
+                    driveDownloadingFolderIds = s.downloadingFolderIds
+                )
+            }
+        }
+    }
 
     private var pageCache: PageBitmapCache? = null
     private var debounceJob: Job? = null
@@ -340,60 +378,24 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    /** Downloads [comic] into the Drive cache ahead of time, without opening the reader. A no-op if it's already cached or already downloading. */
+    /** Downloads [comic] into the Drive cache ahead of time, without opening the reader. A no-op if it's already cached or already downloading. Delegates to [driveDownloadCoordinator], which does the actual work and reports back through the state mirrored in the `init` block above. */
     fun downloadDriveComic(comic: ComicItem) {
-        val state = _uiState.value
-        if (comic.id in state.driveDownloadingIds || comic.id in state.driveCachedIds) return
-        viewModelScope.launch { downloadOneDriveComic(comic) }
-    }
-
-    /** Shared by [downloadDriveComic] and [downloadDriveFolder]'s per-file loop -- marks [comic] downloading, resolves it via [comicFileResolver] (which caches through [driveFileCache] the same way opening a comic does), then marks it cached or leaves it uncached on failure. */
-    private suspend fun downloadOneDriveComic(comic: ComicItem) {
-        if (comic.id in _uiState.value.driveCachedIds) return
-        _uiState.value = _uiState.value.copy(driveDownloadingIds = _uiState.value.driveDownloadingIds + comic.id)
-        try {
-            comicFileResolver(comic, driveFileCache, driveAccessToken)
-            _uiState.value = _uiState.value.copy(driveCachedIds = _uiState.value.driveCachedIds + comic.id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // Leave it uncached -- the row's download icon reappears so the user can retry.
-        } finally {
-            _uiState.value = _uiState.value.copy(driveDownloadingIds = _uiState.value.driveDownloadingIds - comic.id)
-        }
+        driveDownloadCoordinator.enqueueComic(comic)
     }
 
     /** Removes [comicId]'s cached file, if any, so it no longer counts toward the Drive cache. Available any time, independent of read progress. */
     fun deleteDriveComicCache(comicId: String) {
-        driveFileCache().cachedFile(comicId)?.delete()
-        _uiState.value = _uiState.value.copy(driveCachedIds = _uiState.value.driveCachedIds - comicId)
+        driveDownloadCoordinator.deleteCache(comicId)
     }
 
     /** Downloads every comic file directly inside [folderId] (not recursing into subfolders) sequentially, skipping ones already cached. A no-op if this folder's batch is already running. */
     fun downloadDriveFolder(folderId: String) {
-        if (folderId in _uiState.value.driveDownloadingFolderIds) return
-        _uiState.value = _uiState.value.copy(driveDownloadingFolderIds = _uiState.value.driveDownloadingFolderIds + folderId)
-        viewModelScope.launch {
-            try {
-                val token = driveAccessToken() ?: return@launch
-                val entries = fetchDriveFolderContents(folderId, token)
-                entries.filterIsInstance<DriveEntry.ComicFile>().forEach { downloadOneDriveComic(it.comic) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // Couldn't even list the folder's contents -- nothing to download. Per-file
-                // failures inside downloadOneDriveComic are already handled without aborting the
-                // rest of the batch, so this only guards the initial fetchDriveFolderContents call.
-            } finally {
-                _uiState.value = _uiState.value.copy(driveDownloadingFolderIds = _uiState.value.driveDownloadingFolderIds - folderId)
-            }
-        }
+        driveDownloadCoordinator.enqueueFolder(folderId)
     }
 
     /** Clears every Drive file currently cached on disk. */
     fun clearDriveCache() {
-        driveFileCache().clearAll()
-        _uiState.value = _uiState.value.copy(driveCachedIds = emptySet())
+        driveDownloadCoordinator.clearCache()
     }
 
     /**
@@ -681,6 +683,11 @@ class ReaderViewModel @JvmOverloads constructor(
      */
     fun updateDriveAccessToken(token: String?) {
         pushedDriveAccessToken.set(token)
+        // DefaultDriveDownloadCoordinator (the default above) reads pushedDriveAccessToken itself,
+        // so this is a no-op for it -- but ServiceBoundDriveDownloadCoordinator has no access to
+        // that AtomicReference (it isn't in the same process-local object graph the Service
+        // reconstructs its own coordinator from), so it needs the fresh token pushed explicitly.
+        driveDownloadCoordinator.updateAccessToken(token)
         if (token != null && _uiState.value.driveError != null && _uiState.value.driveBreadcrumbs.isNotEmpty()) {
             fetchCurrentDriveFolder()
         }
@@ -929,6 +936,7 @@ class ReaderViewModel @JvmOverloads constructor(
     override fun onCleared() {
         super.onCleared()
         flushAndTeardown()
+        driveDownloadCoordinator.close()
     }
 
     internal fun clearForTest() = onCleared()

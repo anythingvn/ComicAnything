@@ -1,5 +1,7 @@
 package com.comicanything.reader.data.model
 
+import java.io.Serializable
+
 enum class ComicSource {
     LOCAL,
     GOOGLE_DRIVE
@@ -40,4 +42,4 @@ data class ComicItem(
     var lastReadTimestamp: Long = System.currentTimeMillis(),
     var isFavorite: Boolean = false,
     val folderName: String? = null
-)
+) : Serializable

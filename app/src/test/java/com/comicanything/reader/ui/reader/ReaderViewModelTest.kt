@@ -480,6 +480,10 @@ class ReaderViewModelTest {
         assertTrue(cache.cachedFile("d4") != null)
 
         viewModel.deleteDriveComicCache("d4")
+        // deleteDriveComicCache now delegates to driveDownloadCoordinator and its result reaches
+        // driveCachedIds via the mirroring collector in ReaderViewModel's init block -- an extra
+        // coroutine hop that needs a tick to propagate, unlike the old inline implementation.
+        advanceUntilIdle()
 
         assertNull(cache.cachedFile("d4"))
         assertFalse(viewModel.uiState.value.driveCachedIds.contains("d4"))
@@ -535,6 +539,9 @@ class ReaderViewModelTest {
         assertEquals(2, cache.let { c -> listOf(c.cachedFile("c1"), c.cachedFile("c2")).count { it != null } })
 
         viewModel.clearDriveCache()
+        // See the comment in the deleteDriveComicCache test above -- clearDriveCache's result now
+        // reaches driveCachedIds through the coordinator's mirrored state, an extra coroutine hop.
+        advanceUntilIdle()
 
         assertNull(cache.cachedFile("c1"))
         assertNull(cache.cachedFile("c2"))
