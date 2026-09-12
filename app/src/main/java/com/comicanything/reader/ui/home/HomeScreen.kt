@@ -1013,12 +1013,10 @@ private fun DriveFolderBrowser(
     // doesn't have. When present, it also becomes what the system back button does once there's
     // no parent folder left to go up to, instead of leaving back a no-op at that point.
     onHome: (() -> Unit)? = null,
-    // Only the Jump to Folder tab passes this -- lets the user star/un-star the folder they
-    // jumped straight to (the root of this breadcrumb trail) from an icon button inline with the
-    // Home button and breadcrumb name, instead of a separate clickable text row that was easy to
-    // tap by accident.
-    isRootFavorite: Boolean = false,
-    onToggleRootFavorite: (() -> Unit)? = null
+    // Only the Jump to Folder tab passes this -- a shortcut back to the Favorites & Recent list
+    // from an icon button inline with the Home button and breadcrumb name, so switching to a
+    // different favorite doesn't require backing all the way out first.
+    onShowFavorites: (() -> Unit)? = null
 ) {
     // Keyed by folder id and remembered above the isLoading/error/list `when` below, so it
     // survives that block swapping away from the grid and back on every navigation (including
@@ -1080,16 +1078,12 @@ private fun DriveFolderBrowser(
                     )
                 }
             }
-            if (onToggleRootFavorite != null) {
+            if (onShowFavorites != null) {
                 IconButton(
-                    onClick = onToggleRootFavorite,
+                    onClick = onShowFavorites,
                     modifier = Modifier.size(32.dp)
                 ) {
-                    Icon(
-                        imageVector = if (isRootFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                        contentDescription = if (isRootFavorite) "Remove from Favorites" else "Add to Favorites",
-                        tint = if (isRootFavorite) MaterialTheme.colorScheme.secondary else Color.Gray
-                    )
+                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
                 }
             }
         }
@@ -1321,37 +1315,39 @@ fun JumpToFolderContent(
                 }
             }
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = onInputChange,
-                    placeholder = { Text("Paste a shared Google Drive folder link.") },
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (input.isNotEmpty()) {
-                                IconButton(onClick = { onInputChange("") }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+            // The paste-a-link row only makes sense before you've drilled into a folder -- once a
+            // specific folder is open, DriveFolderBrowser's own breadcrumb row (Home icon + folder
+            // name) takes over as the header instead.
+            if (state.jumpToBreadcrumbs.isEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = onInputChange,
+                        placeholder = { Text("Paste a shared Google Drive folder link.") },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (input.isNotEmpty()) {
+                                    IconButton(onClick = { onInputChange("") }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+                                    }
+                                }
+                                IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
+                                    Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
                                 }
                             }
-                            IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
-                                Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { if (input.isNotBlank()) onFetchLink() }),
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                IconButton(onClick = { showFavoritesSheet = true }) {
-                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
+                        },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { if (input.isNotBlank()) onFetchLink() }),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(onClick = { showFavoritesSheet = true }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
+                    }
                 }
+                Spacer(modifier = Modifier.height(12.dp))
             }
-            Spacer(modifier = Modifier.height(12.dp))
-
-            val currentRootId = state.jumpToBreadcrumbs.firstOrNull()?.folderId
-            val currentSavedEntry = currentRootId?.let { id -> state.savedDriveLinks.find { it.folderId == id } }
 
             if (state.jumpToBreadcrumbs.isEmpty() && state.savedDriveLinks.isNotEmpty()) {
                 SavedDriveLinksList(
@@ -1389,16 +1385,7 @@ fun JumpToFolderContent(
                         onSetFavorite(folder.id, !isFavorite, folder.name)
                     },
                     onHome = onClearJumpToFolder,
-                    isRootFavorite = currentSavedEntry?.isFavorite == true,
-                    onToggleRootFavorite = currentRootId?.let { id ->
-                        {
-                            if (currentSavedEntry?.isFavorite == true) {
-                                onSetFavorite(id, false, null)
-                            } else {
-                                favoriteDialogTarget = id to ""
-                            }
-                        }
-                    }
+                    onShowFavorites = { showFavoritesSheet = true }
                 )
             }
         }
@@ -1526,6 +1513,13 @@ private fun SavedDriveLinkRow(
                     )
                     IconButton(onClick = { onEdit(link) }) {
                         Icon(Icons.Default.Edit, contentDescription = "Rename", tint = Color.Gray)
+                    }
+                } else {
+                    // Reuses the same rename dialog as an existing favorite -- since this link isn't
+                    // favorited yet, the dialog's own isRename check makes it show "Add to Favorites"
+                    // instead, which is exactly what promoting a Recent entry needs.
+                    IconButton(onClick = { onEdit(link) }) {
+                        Icon(Icons.Default.StarBorder, contentDescription = "Add to Favorites", tint = Color.Gray)
                     }
                 }
                 IconButton(onClick = { onRemove(link.folderId) }) {
