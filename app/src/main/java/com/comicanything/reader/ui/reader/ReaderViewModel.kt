@@ -488,10 +488,10 @@ class ReaderViewModel @JvmOverloads constructor(
      * was there before -- pasting a new link is a deliberate "start over here" action, unlike
      * [navigateJumpToFolder] which descends from wherever the user already is.
      */
-    fun navigateToLinkedFolderInJumpTab(folderUrlOrId: String) {
+    fun navigateToLinkedFolderInJumpTab(folderUrlOrId: String, displayName: String? = null) {
         val folderId = driveRepo.extractFolderId(folderUrlOrId)
         clearJumpToSearch()
-        _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = listOf(DriveBreadcrumb(folderId, folderId)))
+        _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = listOf(DriveBreadcrumb(folderId, displayName ?: folderId)))
         fetchCurrentJumpToFolder()
         // Recorded regardless of whether the fetch above ends up succeeding -- a saved link is
         // fundamentally "a folder the user pasted," and a transient load failure right now

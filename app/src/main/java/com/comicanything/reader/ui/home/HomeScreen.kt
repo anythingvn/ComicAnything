@@ -331,7 +331,8 @@ fun HomeScreen(
                     onRemoveSavedLink = { folderId -> viewModel.removeSavedDriveLink(folderId) },
                     onOpenSavedLink = { folderId ->
                         driveUrlInput = folderId
-                        viewModel.navigateToLinkedFolderInJumpTab(folderId)
+                        val name = state.savedDriveLinks.find { it.folderId == folderId }?.customName
+                        viewModel.navigateToLinkedFolderInJumpTab(folderId, name)
                     },
                     onClearJumpToFolder = {
                         driveUrlInput = ""
@@ -1011,7 +1012,13 @@ private fun DriveFolderBrowser(
     // Favorites/Recent list, a concept the main Google Drive tab (always anchored at My Drive)
     // doesn't have. When present, it also becomes what the system back button does once there's
     // no parent folder left to go up to, instead of leaving back a no-op at that point.
-    onHome: (() -> Unit)? = null
+    onHome: (() -> Unit)? = null,
+    // Only the Jump to Folder tab passes this -- lets the user star/un-star the folder they
+    // jumped straight to (the root of this breadcrumb trail) from an icon button inline with the
+    // Home button and breadcrumb name, instead of a separate clickable text row that was easy to
+    // tap by accident.
+    isRootFavorite: Boolean = false,
+    onToggleRootFavorite: (() -> Unit)? = null
 ) {
     // Keyed by folder id and remembered above the isLoading/error/list `when` below, so it
     // survives that block swapping away from the grid and back on every navigation (including
@@ -1070,6 +1077,18 @@ private fun DriveFolderBrowser(
                         color = if (index == breadcrumbs.lastIndex) MaterialTheme.colorScheme.primary else Color.Gray,
                         fontSize = 13.sp,
                         modifier = Modifier.clickable { onNavigateUp(index) }
+                    )
+                }
+            }
+            if (onToggleRootFavorite != null) {
+                IconButton(
+                    onClick = onToggleRootFavorite,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isRootFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                        contentDescription = if (isRootFavorite) "Remove from Favorites" else "Add to Favorites",
+                        tint = if (isRootFavorite) MaterialTheme.colorScheme.secondary else Color.Gray
                     )
                 }
             }
@@ -1286,29 +1305,6 @@ fun JumpToFolderContent(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Go to a Drive folder",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Paste a shared Google Drive folder link or ID to open it directly, without navigating there by hand.",
-                    color = Color.Gray,
-                    fontSize = 13.sp
-                )
-            }
-            if (state.isDriveConnected) {
-                IconButton(onClick = { showFavoritesSheet = true }) {
-                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(20.dp))
-
         if (!state.isDriveConnected) {
             Box(modifier = Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1325,56 +1321,37 @@ fun JumpToFolderContent(
                 }
             }
         } else {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                label = { Text("Drive folder URL or ID") },
-                trailingIcon = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (input.isNotEmpty()) {
-                            IconButton(onClick = { onInputChange("") }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    placeholder = { Text("Paste a shared Google Drive folder link.") },
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (input.isNotEmpty()) {
+                                IconButton(onClick = { onInputChange("") }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+                                }
+                            }
+                            IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
+                                Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
                             }
                         }
-                        IconButton(onClick = onFetchLink, enabled = input.isNotBlank()) {
-                            Icon(Icons.Default.Search, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { if (input.isNotBlank()) onFetchLink() }),
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { if (input.isNotBlank()) onFetchLink() }),
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(onClick = { showFavoritesSheet = true }) {
+                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
 
             val currentRootId = state.jumpToBreadcrumbs.firstOrNull()?.folderId
             val currentSavedEntry = currentRootId?.let { id -> state.savedDriveLinks.find { it.folderId == id } }
-            if (currentRootId != null) {
-                val isFavorite = currentSavedEntry?.isFavorite == true
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clickable {
-                            if (isFavorite) onSetFavorite(currentRootId, false, null) else favoriteDialogTarget = currentRootId to ""
-                        }
-                        .padding(vertical = 8.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                        contentDescription = null,
-                        tint = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.Gray,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (isFavorite) "Favorited" else "Add to Favorites",
-                        color = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.Gray,
-                        fontSize = 13.sp
-                    )
-                }
-            } else {
-                Spacer(modifier = Modifier.height(16.dp))
-            }
 
             if (state.jumpToBreadcrumbs.isEmpty() && state.savedDriveLinks.isNotEmpty()) {
                 SavedDriveLinksList(
@@ -1411,7 +1388,17 @@ fun JumpToFolderContent(
                     onToggleFolderFavorite = { folder, isFavorite ->
                         onSetFavorite(folder.id, !isFavorite, folder.name)
                     },
-                    onHome = onClearJumpToFolder
+                    onHome = onClearJumpToFolder,
+                    isRootFavorite = currentSavedEntry?.isFavorite == true,
+                    onToggleRootFavorite = currentRootId?.let { id ->
+                        {
+                            if (currentSavedEntry?.isFavorite == true) {
+                                onSetFavorite(id, false, null)
+                            } else {
+                                favoriteDialogTarget = id to ""
+                            }
+                        }
+                    }
                 )
             }
         }
