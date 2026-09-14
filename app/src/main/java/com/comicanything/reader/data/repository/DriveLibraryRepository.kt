@@ -28,7 +28,12 @@ data class DriveLibraryEntry(
     val title: String,
     val pathOrUrl: String,
     val format: ComicFormat,
-    val coverUrl: String?
+    val coverUrl: String?,
+    // The Drive folder this comic was found in, e.g. "Kotaro" -- lets a comic opened straight
+    // from Recent (with no live browsing context) still download into the right
+    // Download/ComicAnything/<folderName> subfolder. Null for entries saved before this field
+    // existed; DriveDownloadStore treats a null/missing folder name as "Unsorted".
+    val folderName: String? = null
 )
 
 private val Context.driveLibraryDataStore: DataStore<Preferences> by preferencesDataStore(

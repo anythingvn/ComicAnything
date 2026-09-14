@@ -478,30 +478,30 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `deleteDriveComicCache removes the cached file and its id from state`() = runTest {
+    fun `deleteDriveComicCache removes the downloaded file and its id from state`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val cache = com.comicanything.reader.data.repository.DriveFileCache(tempFolder.newFolder("drive-cache"))
+        val store = com.comicanything.reader.data.repository.DriveDownloadStore(tempFolder.newFolder("downloads"))
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveFileCache = { cache },
-            comicFileResolver = { comic, driveCache, _ -> driveCache().download(comic.id) { it.writeText("data") } }
+            driveDownloadStore = { store },
+            comicFileResolver = { comic, driveStore, _ -> driveStore().download(comic.folderName, comic.title) { it.writeText("data") } }
         )
         val comic = ComicItem(id = "d4", title = "Book", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
         viewModel.downloadDriveComic(comic)
         advanceUntilIdle()
-        assertTrue(cache.cachedFile("d4") != null)
+        assertTrue(store.cachedFile(null, "Book") != null)
 
-        viewModel.deleteDriveComicCache("d4")
+        viewModel.deleteDriveComicCache(comic)
         // deleteDriveComicCache now delegates to driveDownloadCoordinator and its result reaches
         // driveCachedIds via the mirroring collector in ReaderViewModel's init block -- an extra
         // coroutine hop that needs a tick to propagate, unlike the old inline implementation.
         advanceUntilIdle()
 
-        assertNull(cache.cachedFile("d4"))
+        assertNull(store.cachedFile(null, "Book"))
         assertFalse(viewModel.uiState.value.driveCachedIds.contains("d4"))
     }
 
@@ -525,7 +525,7 @@ class ReaderViewModelTest {
             comicFileResolver = { comic, _, _ -> resolverCalls.add(comic.id); File(tempFolder.root, "fake") }
         )
 
-        viewModel.downloadDriveFolder("root")
+        viewModel.downloadDriveFolder("root", "My Folder")
         advanceUntilIdle()
 
         assertEquals(listOf("f1", "f2"), resolverCalls)
@@ -534,17 +534,17 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `clearDriveCache empties every cached file and clears driveCachedIds`() = runTest {
+    fun `clearDriveCache empties every downloaded file and clears driveCachedIds`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val cache = com.comicanything.reader.data.repository.DriveFileCache(tempFolder.newFolder("drive-cache-2"))
+        val store = com.comicanything.reader.data.repository.DriveDownloadStore(tempFolder.newFolder("downloads-2"))
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             localRepo = repo,
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveFileCache = { cache },
-            comicFileResolver = { comic, driveCache, _ -> driveCache().download(comic.id) { it.writeText("data") } }
+            driveDownloadStore = { store },
+            comicFileResolver = { comic, driveStore, _ -> driveStore().download(comic.folderName, comic.title) { it.writeText("data") } }
         )
         val comicA = ComicItem(id = "c1", title = "A", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
         val comicB = ComicItem(id = "c2", title = "B", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
@@ -552,15 +552,15 @@ class ReaderViewModelTest {
         advanceUntilIdle()
         viewModel.downloadDriveComic(comicB)
         advanceUntilIdle()
-        assertEquals(2, cache.let { c -> listOf(c.cachedFile("c1"), c.cachedFile("c2")).count { it != null } })
+        assertEquals(2, listOf(store.cachedFile(null, "A"), store.cachedFile(null, "B")).count { it != null })
 
         viewModel.clearDriveCache()
         // See the comment in the deleteDriveComicCache test above -- clearDriveCache's result now
         // reaches driveCachedIds through the coordinator's mirrored state, an extra coroutine hop.
         advanceUntilIdle()
 
-        assertNull(cache.cachedFile("c1"))
-        assertNull(cache.cachedFile("c2"))
+        assertNull(store.cachedFile(null, "A"))
+        assertNull(store.cachedFile(null, "B"))
         assertTrue(viewModel.uiState.value.driveCachedIds.isEmpty())
     }
 
@@ -817,6 +817,11 @@ class ReaderViewModelTest {
     fun `navigateJumpToFolder descends from wherever the jump tab already is, not from the main Drive tab`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val nestedEntries = listOf(DriveEntry.ComicFile(ComicItem(id = "c1", title = "vol1.cbz", pathOrUrl = "https://x/c1", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)))
+        // stampFolderName tags each fetched comic with the breadcrumb name it was found under
+        // ("Nested" here) so it downloads into the matching Download/ComicAnything subfolder --
+        // this is what the viewModel's own state is expected to contain, distinct from the raw
+        // fixture above.
+        val nestedEntriesWithFolderName = listOf(DriveEntry.ComicFile(nestedEntries[0].comic.copy(folderName = "Nested")))
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             localRepo = repo,
@@ -834,7 +839,7 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         assertEquals(listOf("shared-root", "Nested"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.name })
-        assertEquals(nestedEntries, viewModel.uiState.value.jumpToEntries)
+        assertEquals(nestedEntriesWithFolderName, viewModel.uiState.value.jumpToEntries)
         assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
     }
 

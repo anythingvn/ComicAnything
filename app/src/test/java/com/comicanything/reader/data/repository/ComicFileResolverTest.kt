@@ -24,12 +24,12 @@ class ComicFileResolverTest {
             source = ComicSource.LOCAL,
             format = ComicFormat.PDF
         )
-        val cache = DriveFileCache(tempFolder.newFolder("drive-cache"))
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
         var downloadCalls = 0
 
         val resolved = resolveComicFile(
             comic,
-            cache,
+            store,
             downloadDriveFile = { _, _, _ -> downloadCalls++ },
             accessToken = { "should-not-be-used" }
         )
@@ -39,21 +39,22 @@ class ComicFileResolverTest {
     }
 
     @Test
-    fun `a cached Drive comic resolves from the cache with no network call`() = runTest {
-        val cache = DriveFileCache(tempFolder.newFolder("drive-cache"))
-        cache.download("drive-1") { dest -> dest.writeText("cached bytes") }
+    fun `a cached Drive comic resolves from the store with no network call`() = runTest {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
         val comic = ComicItem(
             id = "drive-1",
             title = "Drive Book",
             pathOrUrl = "https://www.googleapis.com/drive/v3/files/drive-1?alt=media",
             source = ComicSource.GOOGLE_DRIVE,
-            format = ComicFormat.PDF
+            format = ComicFormat.PDF,
+            folderName = "Kotaro"
         )
+        store.download(comic.folderName, comic.title) { dest -> dest.writeText("cached bytes") }
         var downloadCalls = 0
 
         val resolved = resolveComicFile(
             comic,
-            cache,
+            store,
             downloadDriveFile = { _, _, _ -> downloadCalls++ },
             accessToken = { "irrelevant-since-cached" }
         )
@@ -64,20 +65,21 @@ class ComicFileResolverTest {
 
     @Test
     fun `a cache-miss Drive comic downloads via the injected function and returns the result`() = runTest {
-        val cache = DriveFileCache(tempFolder.newFolder("drive-cache"))
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
         val comic = ComicItem(
             id = "drive-2",
             title = "Drive Book",
             pathOrUrl = "https://www.googleapis.com/drive/v3/files/drive-2?alt=media",
             source = ComicSource.GOOGLE_DRIVE,
-            format = ComicFormat.CBZ
+            format = ComicFormat.CBZ,
+            folderName = "Kotaro"
         )
         var capturedFileId: String? = null
         var capturedToken: String? = null
 
         val resolved = resolveComicFile(
             comic,
-            cache,
+            store,
             downloadDriveFile = { fileId, destination, token ->
                 capturedFileId = fileId
                 capturedToken = token
@@ -89,12 +91,12 @@ class ComicFileResolverTest {
         assertEquals("drive-2", capturedFileId)
         assertEquals("real-token", capturedToken)
         assertEquals("downloaded bytes", resolved.readText())
-        assertEquals("downloaded bytes", cache.cachedFile("drive-2")?.readText())
+        assertEquals("downloaded bytes", store.cachedFile("Kotaro", "Drive Book")?.readText())
     }
 
     @Test(expected = DriveApiException::class)
     fun `a cache-miss Drive comic with no access token fails fast without attempting a download`() = runTest {
-        val cache = DriveFileCache(tempFolder.newFolder("drive-cache"))
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
         val comic = ComicItem(
             id = "drive-3",
             title = "Drive Book",
@@ -105,7 +107,7 @@ class ComicFileResolverTest {
 
         resolveComicFile(
             comic,
-            cache,
+            store,
             downloadDriveFile = { _, _, _ -> throw AssertionError("should not be called") },
             accessToken = { null }
         )

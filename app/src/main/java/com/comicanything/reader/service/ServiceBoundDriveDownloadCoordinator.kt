@@ -69,15 +69,16 @@ class ServiceBoundDriveDownloadCoordinator(private val context: Context) : Drive
         }
     }
 
-    override fun deleteCache(comicId: String) {
+    override fun deleteCache(comic: ComicItem) {
         send(DriveDownloadService.ACTION_DELETE_CACHE) {
-            putExtra(DriveDownloadService.EXTRA_COMIC_ID, comicId)
+            putExtra(DriveDownloadService.EXTRA_COMIC, comic)
         }
     }
 
-    override fun enqueueFolder(folderId: String) {
+    override fun enqueueFolder(folderId: String, folderName: String) {
         send(DriveDownloadService.ACTION_ENQUEUE_FOLDER) {
             putExtra(DriveDownloadService.EXTRA_FOLDER_ID, folderId)
+            putExtra(DriveDownloadService.EXTRA_FOLDER_NAME, folderName)
             putExtra(DriveDownloadService.EXTRA_TOKEN, accessToken)
         }
     }

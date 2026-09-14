@@ -1,8 +1,8 @@
 package com.comicanything.reader.service
 
 import com.comicanything.reader.data.model.ComicItem
+import com.comicanything.reader.data.repository.DriveDownloadStore
 import com.comicanything.reader.data.repository.DriveEntry
-import com.comicanything.reader.data.repository.DriveFileCache
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -37,8 +37,10 @@ data class DriveDownloadState(
 interface DriveDownloadCoordinator {
     val state: StateFlow<DriveDownloadState>
     fun enqueueComic(comic: ComicItem)
-    fun deleteCache(comicId: String)
-    fun enqueueFolder(folderId: String)
+    /** [comic]'s folderName/title identify which file on disk to remove -- see [DriveDownloadStore]. */
+    fun deleteCache(comic: ComicItem)
+    /** [folderName] is stamped onto every comic downloaded from [folderId], so they land in Download/ComicAnything/<folderName>. */
+    fun enqueueFolder(folderId: String, folderName: String)
     fun clearCache()
     fun cancelAll()
     /** No-op for [DefaultDriveDownloadCoordinator], which reads its token lazily instead; overridden by ServiceBoundDriveDownloadCoordinator, which has no access to that lazy supplier. */
@@ -62,9 +64,9 @@ interface DriveDownloadCoordinator {
  */
 class DefaultDriveDownloadCoordinator(
     scope: CoroutineScope,
-    private val driveFileCache: () -> DriveFileCache,
+    private val driveDownloadStore: () -> DriveDownloadStore,
     private val driveAccessToken: () -> String?,
-    private val comicFileResolver: suspend (ComicItem, () -> DriveFileCache, () -> String?) -> File,
+    private val comicFileResolver: suspend (ComicItem, () -> DriveDownloadStore, () -> String?) -> File,
     private val fetchFolderContents: suspend (String, String) -> List<DriveEntry>
 ) : DriveDownloadCoordinator {
 
@@ -87,7 +89,7 @@ class DefaultDriveDownloadCoordinator(
             currentLabel = comic.title
         )
         try {
-            comicFileResolver(comic, driveFileCache, driveAccessToken)
+            comicFileResolver(comic, driveDownloadStore, driveAccessToken)
             _state.value = _state.value.copy(cachedIds = _state.value.cachedIds + comic.id)
         } catch (e: CancellationException) {
             throw e
@@ -98,18 +100,20 @@ class DefaultDriveDownloadCoordinator(
         }
     }
 
-    override fun deleteCache(comicId: String) {
-        driveFileCache().cachedFile(comicId)?.delete()
-        _state.value = _state.value.copy(cachedIds = _state.value.cachedIds - comicId)
+    override fun deleteCache(comic: ComicItem) {
+        driveDownloadStore().delete(comic.folderName, comic.title)
+        _state.value = _state.value.copy(cachedIds = _state.value.cachedIds - comic.id)
     }
 
-    override fun enqueueFolder(folderId: String) {
+    override fun enqueueFolder(folderId: String, folderName: String) {
         if (folderId in _state.value.downloadingFolderIds) return
         _state.value = _state.value.copy(downloadingFolderIds = _state.value.downloadingFolderIds + folderId)
         downloadScope.launch {
             try {
                 val token = driveAccessToken() ?: return@launch
-                val comics = fetchFolderContents(folderId, token).filterIsInstance<DriveEntry.ComicFile>().map { it.comic }
+                val comics = fetchFolderContents(folderId, token)
+                    .filterIsInstance<DriveEntry.ComicFile>()
+                    .map { it.comic.copy(folderName = folderName) }
                 _state.value = _state.value.copy(batchTotal = comics.size, batchCompleted = 0)
                 comics.forEach { comic ->
                     downloadOne(comic)
@@ -132,7 +136,7 @@ class DefaultDriveDownloadCoordinator(
     }
 
     override fun clearCache() {
-        driveFileCache().clearAll()
+        driveDownloadStore().clearAll()
         _state.value = _state.value.copy(cachedIds = emptySet())
     }
 

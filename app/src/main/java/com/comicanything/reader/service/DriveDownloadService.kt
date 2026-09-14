@@ -10,9 +10,10 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import android.os.Environment
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
-import com.comicanything.reader.data.repository.DriveFileCache
+import com.comicanything.reader.data.repository.DriveDownloadStore
 import com.comicanything.reader.data.repository.GoogleDriveRepository
 import com.comicanything.reader.data.repository.resolveComicFile
 import kotlinx.coroutines.CoroutineScope
@@ -48,14 +49,16 @@ class DriveDownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val cacheSupplier: () -> DriveFileCache = { DriveFileCache(File(applicationContext.filesDir, "drive_cache")) }
+        val storeSupplier: () -> DriveDownloadStore = {
+            DriveDownloadStore(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "ComicAnything"))
+        }
         coordinator = DefaultDriveDownloadCoordinator(
             scope = serviceScope,
-            driveFileCache = cacheSupplier,
+            driveDownloadStore = storeSupplier,
             driveAccessToken = { currentAccessToken },
-            comicFileResolver = { comic, cache, token ->
+            comicFileResolver = { comic, store, token ->
                 if (comic.source == ComicSource.LOCAL) File(comic.pathOrUrl)
-                else resolveComicFile(comic, cache(), driveRepo::downloadFile, token)
+                else resolveComicFile(comic, store(), driveRepo::downloadFile, token)
             },
             fetchFolderContents = driveRepo::fetchFolderContents
         )
@@ -76,9 +79,11 @@ class DriveDownloadService : Service() {
             }
             ACTION_ENQUEUE_FOLDER -> {
                 currentAccessToken = intent.getStringExtra(EXTRA_TOKEN)
-                intent.getStringExtra(EXTRA_FOLDER_ID)?.let { coordinator.enqueueFolder(it) }
+                val folderId = intent.getStringExtra(EXTRA_FOLDER_ID)
+                val folderName = intent.getStringExtra(EXTRA_FOLDER_NAME)
+                if (folderId != null && folderName != null) coordinator.enqueueFolder(folderId, folderName)
             }
-            ACTION_DELETE_CACHE -> intent.getStringExtra(EXTRA_COMIC_ID)?.let { coordinator.deleteCache(it) }
+            ACTION_DELETE_CACHE -> extractComic(intent)?.let { coordinator.deleteCache(it) }
             ACTION_CLEAR_CACHE -> coordinator.clearCache()
             ACTION_CANCEL -> coordinator.cancelAll()
         }
@@ -157,8 +162,8 @@ class DriveDownloadService : Service() {
         const val ACTION_CANCEL = "com.comicanything.reader.action.CANCEL"
 
         const val EXTRA_COMIC = "comic"
-        const val EXTRA_COMIC_ID = "comic_id"
         const val EXTRA_FOLDER_ID = "folder_id"
+        const val EXTRA_FOLDER_NAME = "folder_name"
         const val EXTRA_TOKEN = "token"
     }
 }

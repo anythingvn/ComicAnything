@@ -5,8 +5,8 @@ import com.comicanything.reader.data.model.ComicFormat
 import com.comicanything.reader.data.model.ComicItem
 import com.comicanything.reader.data.model.ComicSource
 import com.comicanything.reader.data.repository.DriveApiException
+import com.comicanything.reader.data.repository.DriveDownloadStore
 import com.comicanything.reader.data.repository.DriveEntry
-import com.comicanything.reader.data.repository.DriveFileCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -36,11 +36,11 @@ class DriveDownloadCoordinatorTest {
 
     private fun coordinator(
         scope: CoroutineScope,
-        driveFileCache: () -> DriveFileCache = { DriveFileCache(tempFolder.newFolder("cache-${System.nanoTime()}")) },
+        driveDownloadStore: () -> DriveDownloadStore = { DriveDownloadStore(tempFolder.newFolder("downloads-${System.nanoTime()}")) },
         driveAccessToken: () -> String? = { "token" },
-        comicFileResolver: suspend (ComicItem, () -> DriveFileCache, () -> String?) -> File,
+        comicFileResolver: suspend (ComicItem, () -> DriveDownloadStore, () -> String?) -> File,
         fetchFolderContents: suspend (String, String) -> List<DriveEntry> = { _, _ -> emptyList() }
-    ) = DefaultDriveDownloadCoordinator(scope, driveFileCache, driveAccessToken, comicFileResolver, fetchFolderContents)
+    ) = DefaultDriveDownloadCoordinator(scope, driveDownloadStore, driveAccessToken, comicFileResolver, fetchFolderContents)
 
     private fun comic(id: String, title: String = "Book") =
         ComicItem(id = id, title = title, pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)
@@ -100,27 +100,28 @@ class DriveDownloadCoordinatorTest {
     }
 
     @Test
-    fun `deleteCache removes the cached file and its id from state`() = runTest {
-        val cache = DriveFileCache(tempFolder.newFolder("drive-cache"))
+    fun `deleteCache removes the downloaded file and its id from state`() = runTest {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
+        val d4 = comic("d4", "Book Four")
         val c = coordinator(
             testCoordinatorScope(),
-            driveFileCache = { cache },
-            comicFileResolver = { item, driveCache, _ -> driveCache().download(item.id) { it.writeText("data") } }
+            driveDownloadStore = { store },
+            comicFileResolver = { item, storeProvider, _ -> storeProvider().download(item.folderName, item.title) { it.writeText("data") } }
         )
 
-        c.enqueueComic(comic("d4"))
+        c.enqueueComic(d4)
         advanceUntilIdle()
-        assertTrue(cache.cachedFile("d4") != null)
+        assertTrue(store.cachedFile(null, "Book Four") != null)
 
-        c.deleteCache("d4")
+        c.deleteCache(d4)
 
-        assertNull(cache.cachedFile("d4"))
+        assertNull(store.cachedFile(null, "Book Four"))
         assertFalse(c.state.value.cachedIds.contains("d4"))
     }
 
     @Test
-    fun `enqueueFolder downloads only the comic files directly in that folder, skipping already-cached ones`() = runTest {
-        val resolverCalls = mutableListOf<String>()
+    fun `enqueueFolder downloads only the comic files directly in that folder, skipping already-cached ones, and stamps folderName onto each`() = runTest {
+        val resolverCalls = mutableListOf<Pair<String, String?>>()
         val folderEntries = listOf(
             DriveEntry.Folder(id = "sub", name = "Subfolder"),
             DriveEntry.ComicFile(comic("f1", "One")),
@@ -128,37 +129,37 @@ class DriveDownloadCoordinatorTest {
         )
         val c = coordinator(
             testCoordinatorScope(),
-            comicFileResolver = { item, _, _ -> resolverCalls.add(item.id); File(tempFolder.root, "fake") },
+            comicFileResolver = { item, _, _ -> resolverCalls.add(item.id to item.folderName); File(tempFolder.root, "fake") },
             fetchFolderContents = { _, _ -> folderEntries }
         )
 
-        c.enqueueFolder("root")
+        c.enqueueFolder("root", "Kotaro")
         advanceUntilIdle()
 
-        assertEquals(listOf("f1", "f2"), resolverCalls)
+        assertEquals(listOf("f1" to "Kotaro", "f2" to "Kotaro"), resolverCalls)
         assertEquals(setOf("f1", "f2"), c.state.value.cachedIds)
         assertTrue(c.state.value.downloadingFolderIds.isEmpty())
         assertEquals(0, c.state.value.batchTotal)
     }
 
     @Test
-    fun `clearCache empties every cached file and clears cachedIds`() = runTest {
-        val cache = DriveFileCache(tempFolder.newFolder("drive-cache-2"))
+    fun `clearCache empties every downloaded file and clears cachedIds`() = runTest {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads-2"))
         val c = coordinator(
             testCoordinatorScope(),
-            driveFileCache = { cache },
-            comicFileResolver = { item, driveCache, _ -> driveCache().download(item.id) { it.writeText("data") } }
+            driveDownloadStore = { store },
+            comicFileResolver = { item, storeProvider, _ -> storeProvider().download(item.folderName, item.title) { it.writeText("data") } }
         )
-        c.enqueueComic(comic("c1"))
+        c.enqueueComic(comic("c1", "Comic One"))
         advanceUntilIdle()
-        c.enqueueComic(comic("c2"))
+        c.enqueueComic(comic("c2", "Comic Two"))
         advanceUntilIdle()
-        assertEquals(2, listOf(cache.cachedFile("c1"), cache.cachedFile("c2")).count { it != null })
+        assertEquals(2, listOf(store.cachedFile(null, "Comic One"), store.cachedFile(null, "Comic Two")).count { it != null })
 
         c.clearCache()
 
-        assertNull(cache.cachedFile("c1"))
-        assertNull(cache.cachedFile("c2"))
+        assertNull(store.cachedFile(null, "Comic One"))
+        assertNull(store.cachedFile(null, "Comic Two"))
         assertTrue(c.state.value.cachedIds.isEmpty())
     }
 

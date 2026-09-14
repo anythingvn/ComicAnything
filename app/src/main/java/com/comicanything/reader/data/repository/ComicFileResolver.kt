@@ -6,14 +6,14 @@ import java.io.File
 
 suspend fun resolveComicFile(
     comic: ComicItem,
-    driveCache: DriveFileCache,
+    driveStore: DriveDownloadStore,
     downloadDriveFile: suspend (fileId: String, destination: File, accessToken: String) -> Unit,
     accessToken: () -> String?
 ): File {
     if (comic.source == ComicSource.LOCAL) {
         return File(comic.pathOrUrl)
     }
-    driveCache.cachedFile(comic.id)?.let { return it }
+    driveStore.cachedFile(comic.folderName, comic.title)?.let { return it }
     val token = accessToken() ?: throw DriveApiException("Not connected to Google Drive")
-    return driveCache.download(comic.id) { destination -> downloadDriveFile(comic.id, destination, token) }
+    return driveStore.download(comic.folderName, comic.title) { destination -> downloadDriveFile(comic.id, destination, token) }
 }

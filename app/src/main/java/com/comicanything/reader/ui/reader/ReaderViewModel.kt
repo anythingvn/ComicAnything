@@ -2,6 +2,7 @@ package com.comicanything.reader.ui.reader
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.comicanything.reader.data.epub.EpubBook
@@ -18,8 +19,8 @@ import com.comicanything.reader.data.pagesource.createPageSource
 import com.comicanything.reader.data.pagesource.decodeThumbnail
 import com.comicanything.reader.data.repository.DriveConnectionHint
 import com.comicanything.reader.data.repository.DriveConnectionRepository
+import com.comicanything.reader.data.repository.DriveDownloadStore
 import com.comicanything.reader.data.repository.DriveEntry
-import com.comicanything.reader.data.repository.DriveFileCache
 import com.comicanything.reader.data.repository.DriveLibraryEntry
 import com.comicanything.reader.data.repository.DriveLibraryRepository
 import com.comicanything.reader.data.repository.DriveSearchHit
@@ -155,7 +156,7 @@ class ReaderViewModel @JvmOverloads constructor(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val progressRepo: ReadingProgressRepository = ReadingProgressRepository(application),
     private val connectionRepo: DriveConnectionRepository = DriveConnectionRepository(application),
-    // Lazy supplier for the same reason as settingsRepo/driveFileCache below: a plain
+    // Lazy supplier for the same reason as settingsRepo/driveDownloadStore below: a plain
     // `= SavedDriveLinkRepository(application)` default would construct eagerly at every
     // ReaderViewModel construction, touching Context.getApplicationContext() (throws "not mocked"
     // in plain JVM unit tests) even for the ~70 existing test cases that never touch saved Drive
@@ -165,15 +166,20 @@ class ReaderViewModel @JvmOverloads constructor(
     private val epubExtractor: suspend (File, File) -> EpubBook? = ::extractEpub,
     private val epubCacheRoot: () -> File = { File(application.cacheDir, "epub_temp") },
     private val cbrCacheRoot: () -> File = { File(application.cacheDir, "cbr_temp") },
-    // A plain (non-lambda) `DriveFileCache = DriveFileCache(File(application.filesDir, ...))`
-    // default would construct eagerly at every ReaderViewModel construction (Kotlin evaluates
-    // constructor parameter defaults unconditionally when the caller omits the argument),
-    // immediately touching Context.getFilesDir() -- an Android stub-jar method that throws "not
-    // mocked" in plain JVM unit tests, exactly like the progressRepo/connectionRepo hazard
-    // documented in ReaderViewModelTest. Wrapping it as a `() -> DriveFileCache` supplier, matching
-    // the existing epubCacheRoot/cbrCacheRoot pattern, defers that construction to actual use.
-    private val driveFileCache: () -> DriveFileCache = { DriveFileCache(File(application.filesDir, "drive_cache")) },
-    // Lazy supplier for the same reason as driveFileCache above: a plain
+    // A plain (non-lambda) default pointing straight at Environment.getExternalStoragePublicDirectory
+    // would construct eagerly at every ReaderViewModel construction (Kotlin evaluates constructor
+    // parameter defaults unconditionally when the caller omits the argument), immediately touching
+    // an Android stub-jar method that throws "not mocked" in plain JVM unit tests, exactly like the
+    // progressRepo/connectionRepo hazard documented in ReaderViewModelTest. Wrapping it as a
+    // `() -> DriveDownloadStore` supplier, matching the existing epubCacheRoot/cbrCacheRoot pattern,
+    // defers that construction to actual use. Downloads land in the device's public Downloads
+    // folder (Download/ComicAnything/<folder>) rather than app-private storage, so they survive
+    // app updates/reinstalls and are visible to the user outside the app -- see
+    // DriveDownloadStore's doc comment for why there's no size cap here unlike the old cache.
+    private val driveDownloadStore: () -> DriveDownloadStore = {
+        DriveDownloadStore(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "ComicAnything"))
+    },
+    // Lazy supplier for the same reason as driveDownloadStore above: a plain
     // `= ReaderSettingsRepository(application)` default would construct eagerly at every
     // ReaderViewModel construction, touching Context.getApplicationContext() (throws "not
     // mocked" in plain JVM unit tests) even for the ~50 existing test cases that never touch
@@ -207,18 +213,18 @@ class ReaderViewModel @JvmOverloads constructor(
     // explicitly overrides the whole lambda, bypassing `pushedDriveAccessToken` entirely.
     private val driveAccessToken: () -> String? = { pushedDriveAccessToken.get() },
     // The LOCAL short-circuit is duplicated here (matching resolveComicFile's own LOCAL check)
-    // so that a LOCAL comic open never invokes `cacheProvider()` at all -- preserving the same
+    // so that a LOCAL comic open never invokes `storeProvider()` at all -- preserving the same
     // "never touches a lazy resource it doesn't need" guarantee cbrCacheRoot already has for
-    // non-CBR formats. Calling resolveComicFile(comic, cacheProvider(), ...) unconditionally would
-    // defeat driveFileCache's laziness, since Kotlin evaluates function arguments (including
-    // cacheProvider()) before the callee runs, regardless of what branch resolveComicFile takes
+    // non-CBR formats. Calling resolveComicFile(comic, storeProvider(), ...) unconditionally would
+    // defeat driveDownloadStore's laziness, since Kotlin evaluates function arguments (including
+    // storeProvider()) before the callee runs, regardless of what branch resolveComicFile takes
     // internally.
-    private val comicFileResolver: suspend (ComicItem, () -> DriveFileCache, () -> String?) -> File =
-        { comic, cacheProvider, token ->
+    private val comicFileResolver: suspend (ComicItem, () -> DriveDownloadStore, () -> String?) -> File =
+        { comic, storeProvider, token ->
             if (comic.source == ComicSource.LOCAL) {
                 File(comic.pathOrUrl)
             } else {
-                resolveComicFile(comic, cacheProvider(), driveRepo::downloadFile, token)
+                resolveComicFile(comic, storeProvider(), driveRepo::downloadFile, token)
             }
         },
     private val fetchDriveFolderContents: suspend (String, String) -> List<DriveEntry> = driveRepo::fetchFolderContents,
@@ -248,7 +254,7 @@ class ReaderViewModel @JvmOverloads constructor(
     private val driveDownloadCoordinator: DriveDownloadCoordinator = driveDownloadCoordinatorOverride
         ?: DefaultDriveDownloadCoordinator(
             scope = viewModelScope,
-            driveFileCache = driveFileCache,
+            driveDownloadStore = driveDownloadStore,
             driveAccessToken = driveAccessToken,
             comicFileResolver = comicFileResolver,
             fetchFolderContents = fetchDriveFolderContents
@@ -346,6 +352,7 @@ class ReaderViewModel @JvmOverloads constructor(
                     source = ComicSource.GOOGLE_DRIVE,
                     format = entry.format,
                     coverUrl = entry.coverUrl,
+                    folderName = entry.folderName,
                     currentPage = progress.currentPage,
                     totalPages = progress.totalPages,
                     progressPercentage = progress.progressPercentage,
@@ -375,6 +382,17 @@ class ReaderViewModel @JvmOverloads constructor(
         fetchCurrentDriveFolder()
     }
 
+    /**
+     * Stamps [folderName] onto every comic file in this listing -- DriveEntry.ComicFile's own
+     * comic has no idea what folder it was just listed in (GoogleDriveRepository only knows the
+     * folder's id, not its display name), but the caller fetching this listing always does, via
+     * the current breadcrumb. Used to pick the Download/ComicAnything/<folderName> destination
+     * subfolder when a comic is downloaded, whether now or lazily much later from Recent.
+     */
+    private fun List<DriveEntry>.stampFolderName(folderName: String): List<DriveEntry> = map { entry ->
+        if (entry is DriveEntry.ComicFile) DriveEntry.ComicFile(entry.comic.copy(folderName = folderName)) else entry
+    }
+
     private fun fetchCurrentDriveFolder() {
         val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
         viewModelScope.launch {
@@ -388,7 +406,7 @@ class ReaderViewModel @JvmOverloads constructor(
                 return@launch
             }
             try {
-                val entries = fetchDriveFolderContents(current.folderId, token)
+                val entries = fetchDriveFolderContents(current.folderId, token).stampFolderName(current.name)
                 _uiState.value = _uiState.value.copy(driveEntries = entries, isLoadingDrive = false)
             } catch (e: CancellationException) {
                 throw e
@@ -411,14 +429,14 @@ class ReaderViewModel @JvmOverloads constructor(
         driveDownloadCoordinator.enqueueComic(comic)
     }
 
-    /** Removes [comicId]'s cached file, if any, so it no longer counts toward the Drive cache. Available any time, independent of read progress. */
-    fun deleteDriveComicCache(comicId: String) {
-        driveDownloadCoordinator.deleteCache(comicId)
+    /** Removes [comic]'s downloaded file, if any, so it no longer counts toward the Drive downloads. Available any time, independent of read progress. */
+    fun deleteDriveComicCache(comic: ComicItem) {
+        driveDownloadCoordinator.deleteCache(comic)
     }
 
-    /** Downloads every comic file directly inside [folderId] (not recursing into subfolders) sequentially, skipping ones already cached. A no-op if this folder's batch is already running. */
-    fun downloadDriveFolder(folderId: String) {
-        driveDownloadCoordinator.enqueueFolder(folderId)
+    /** Downloads every comic file directly inside [folderId] (not recursing into subfolders) sequentially, skipping ones already downloaded. [folderName] is stamped onto each so they land in Download/ComicAnything/<folderName>. A no-op if this folder's batch is already running. */
+    fun downloadDriveFolder(folderId: String, folderName: String) {
+        driveDownloadCoordinator.enqueueFolder(folderId, folderName)
     }
 
     /** Clears every Drive file currently cached on disk. */
@@ -573,7 +591,7 @@ class ReaderViewModel @JvmOverloads constructor(
                 return@launch
             }
             try {
-                val entries = fetchDriveFolderContents(current.folderId, token)
+                val entries = fetchDriveFolderContents(current.folderId, token).stampFolderName(current.name)
                 _uiState.value = _uiState.value.copy(jumpToEntries = entries, isLoadingJumpTo = false)
             } catch (e: CancellationException) {
                 throw e
@@ -809,7 +827,7 @@ class ReaderViewModel @JvmOverloads constructor(
             val source = try {
                 withTimeout(OPEN_TIMEOUT_MS) {
                     withContext(ioDispatcher) {
-                        val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                        val file = comicFileResolver(comic, driveDownloadStore, driveAccessToken)
                         createPageSource(comic, cbrCacheRoot, file)
                     }
                 }
@@ -920,7 +938,7 @@ class ReaderViewModel @JvmOverloads constructor(
             val extractionDir = File(epubCacheRoot(), comic.id)
             val book = try {
                 withContext(ioDispatcher) {
-                    val file = comicFileResolver(comic, driveFileCache, driveAccessToken)
+                    val file = comicFileResolver(comic, driveDownloadStore, driveAccessToken)
                     epubExtractor(file, extractionDir)
                 }
             } catch (e: CancellationException) {
@@ -1117,7 +1135,8 @@ class ReaderViewModel @JvmOverloads constructor(
                 title = comic.title,
                 pathOrUrl = comic.pathOrUrl,
                 format = comic.format,
-                coverUrl = comic.coverUrl
+                coverUrl = comic.coverUrl,
+                folderName = comic.folderName
             )
         )
     }

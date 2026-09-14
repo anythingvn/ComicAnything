@@ -304,8 +304,8 @@ fun HomeScreen(
                     onDisconnectDrive = onDisconnectDrive,
                     onSwitchDriveAccount = onSwitchDriveAccount,
                     onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
-                    onDeleteComicCache = { comicId -> viewModel.deleteDriveComicCache(comicId) },
-                    onDownloadFolder = { folderId -> viewModel.downloadDriveFolder(folderId) },
+                    onDeleteComicCache = { comic -> viewModel.deleteDriveComicCache(comic) },
+                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) },
                     onClearCache = { viewModel.clearDriveCache() },
                     onSetFavorite = { folderId, isFavorite, customName -> viewModel.setFolderFavorite(folderId, isFavorite, customName) },
                     onRemoveSavedLink = { folderId -> viewModel.removeSavedDriveLink(folderId) },
@@ -339,8 +339,8 @@ fun HomeScreen(
                         viewModel.clearJumpToFolder()
                     },
                     onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
-                    onDeleteComicCache = { comicId -> viewModel.deleteDriveComicCache(comicId) },
-                    onDownloadFolder = { folderId -> viewModel.downloadDriveFolder(folderId) }
+                    onDeleteComicCache = { comic -> viewModel.deleteDriveComicCache(comic) },
+                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) }
                 )
                 3 -> LocalFilesContent(
                     state = state,
@@ -725,8 +725,8 @@ fun DriveContent(
     onDisconnectDrive: () -> Unit,
     onSwitchDriveAccount: () -> Unit,
     onDownloadComic: (ComicItem) -> Unit,
-    onDeleteComicCache: (String) -> Unit,
-    onDownloadFolder: (String) -> Unit,
+    onDeleteComicCache: (ComicItem) -> Unit,
+    onDownloadFolder: (String, String) -> Unit,
     onClearCache: () -> Unit,
     onSetFavorite: (String, Boolean, String?) -> Unit,
     onRemoveSavedLink: (String) -> Unit,
@@ -1004,8 +1004,8 @@ private fun DriveFolderBrowser(
     cachedIds: Set<String>,
     downloadingFolderIds: Set<String>,
     onDownloadComic: (ComicItem) -> Unit,
-    onDeleteComicCache: (String) -> Unit,
-    onDownloadFolder: (String) -> Unit,
+    onDeleteComicCache: (ComicItem) -> Unit,
+    onDownloadFolder: (String, String) -> Unit,
     favoriteFolderIds: Set<String>,
     onToggleFolderFavorite: (DriveEntry.Folder, Boolean) -> Unit,
     // Only the Jump to Folder tab passes this -- it clears jumpToBreadcrumbs back to the
@@ -1157,7 +1157,7 @@ private fun DriveFolderBrowser(
                                         )
                                         DriveFolderDownloadAction(
                                             isDownloading = entry.id in downloadingFolderIds,
-                                            onDownload = { onDownloadFolder(entry.id) }
+                                            onDownload = { onDownloadFolder(entry.id, entry.name) }
                                         )
                                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                                     }
@@ -1177,7 +1177,7 @@ private fun DriveFolderBrowser(
                                             isDownloading = entry.comic.id in downloadingIds,
                                             isCached = entry.comic.id in cachedIds,
                                             onDownload = { onDownloadComic(entry.comic) },
-                                            onDelete = { onDeleteComicCache(entry.comic.id) }
+                                            onDelete = { onDeleteComicCache(entry.comic) }
                                         )
                                         Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                                     }
@@ -1226,7 +1226,7 @@ private fun DriveFolderBrowser(
                                     )
                                     DriveFolderDownloadAction(
                                         isDownloading = entry.id in downloadingFolderIds,
-                                        onDownload = { onDownloadFolder(entry.id) }
+                                        onDownload = { onDownloadFolder(entry.id, entry.name) }
                                     )
                                     Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                                 }
@@ -1246,7 +1246,7 @@ private fun DriveFolderBrowser(
                                         isDownloading = entry.comic.id in downloadingIds,
                                         isCached = entry.comic.id in cachedIds,
                                         onDownload = { onDownloadComic(entry.comic) },
-                                        onDelete = { onDeleteComicCache(entry.comic.id) }
+                                        onDelete = { onDeleteComicCache(entry.comic) }
                                     )
                                     Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                                 }
@@ -1286,8 +1286,8 @@ fun JumpToFolderContent(
     onOpenSavedLink: (String) -> Unit,
     onClearJumpToFolder: () -> Unit,
     onDownloadComic: (ComicItem) -> Unit,
-    onDeleteComicCache: (String) -> Unit,
-    onDownloadFolder: (String) -> Unit
+    onDeleteComicCache: (ComicItem) -> Unit,
+    onDownloadFolder: (String, String) -> Unit
 ) {
     // folderId to the name pre-filled into the dialog -- "" for a brand new favorite, or the
     // existing custom name when reopened via a saved entry's rename (pencil) icon.
@@ -1461,7 +1461,7 @@ private fun SavedDriveLinksList(
     onRemove: (String) -> Unit,
     onEdit: (SavedDriveLink) -> Unit,
     downloadingFolderIds: Set<String>,
-    onDownloadFolder: (String) -> Unit
+    onDownloadFolder: (String, String) -> Unit
 ) {
     val favorites = links.filter { it.isFavorite }.sortedBy { (it.customName ?: it.folderId).lowercase() }
     val recents = links.filter { !it.isFavorite }.sortedByDescending { it.lastUsedTimestamp }
@@ -1493,7 +1493,7 @@ private fun SavedDriveLinkRow(
     onRemove: (String) -> Unit,
     onEdit: (SavedDriveLink) -> Unit,
     downloadingFolderIds: Set<String>,
-    onDownloadFolder: (String) -> Unit
+    onDownloadFolder: (String, String) -> Unit
 ) {
     ListItem(
         headlineContent = { Text(link.customName ?: link.folderId, color = Color.White, fontWeight = FontWeight.Bold) },
@@ -1509,7 +1509,7 @@ private fun SavedDriveLinkRow(
                 if (link.isFavorite) {
                     DriveFolderDownloadAction(
                         isDownloading = link.folderId in downloadingFolderIds,
-                        onDownload = { onDownloadFolder(link.folderId) }
+                        onDownload = { onDownloadFolder(link.folderId, link.customName ?: link.folderId) }
                     )
                     IconButton(onClick = { onEdit(link) }) {
                         Icon(Icons.Default.Edit, contentDescription = "Rename", tint = Color.Gray)
