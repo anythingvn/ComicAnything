@@ -164,6 +164,45 @@ class DriveDownloadCoordinatorTest {
     }
 
     @Test
+    fun `refreshCachedStatus marks comics already on disk as cached without re-downloading them`() = runTest {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads-3"))
+        store.download("Kotaro", "Already Downloaded") { it.writeText("data") }
+        var resolverCalls = 0
+        val c = coordinator(
+            testCoordinatorScope(),
+            driveDownloadStore = { store },
+            comicFileResolver = { _, _, _ -> resolverCalls++; File(tempFolder.root, "fake") }
+        )
+        val onDisk = ComicItem(id = "d6", title = "Already Downloaded", pathOrUrl = "url", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ, folderName = "Kotaro")
+        val notOnDisk = comic("d7", "Not Downloaded")
+
+        c.refreshCachedStatus(listOf(onDisk, notOnDisk))
+
+        assertEquals(setOf("d6"), c.state.value.cachedIds)
+        // Confirms this reconciliation never triggers an actual download attempt.
+        assertEquals(0, resolverCalls)
+    }
+
+    @Test
+    fun `refreshCachedStatus is a no-op for a comic already known to be cached`() = runTest {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads-4"))
+        store.download(null, "Book") { it.writeText("data") }
+        val c = coordinator(
+            testCoordinatorScope(),
+            driveDownloadStore = { store },
+            comicFileResolver = { _, _, _ -> File(tempFolder.root, "fake") }
+        )
+        val d8 = comic("d8", "Book")
+        c.enqueueComic(d8)
+        advanceUntilIdle()
+        assertTrue(c.state.value.cachedIds.contains("d8"))
+
+        c.refreshCachedStatus(listOf(d8))
+
+        assertEquals(setOf("d8"), c.state.value.cachedIds)
+    }
+
+    @Test
     fun `cancelAll stops in-flight downloads without touching unrelated coroutines on the shared scope`() = runTest {
         var unrelatedRan = false
         val sharedScope = testCoordinatorScope()

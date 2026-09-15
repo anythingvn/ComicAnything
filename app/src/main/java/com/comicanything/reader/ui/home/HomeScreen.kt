@@ -340,7 +340,10 @@ fun HomeScreen(
                     },
                     onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
                     onDeleteComicCache = { comic -> viewModel.deleteDriveComicCache(comic) },
-                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) }
+                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) },
+                    onShowDownloadedFiles = { viewModel.showDownloadedFiles() },
+                    onHideDownloadedFiles = { viewModel.hideDownloadedFiles() },
+                    onDeleteDownloadedComic = { comic -> viewModel.deleteDownloadedComic(comic) }
                 )
                 3 -> LocalFilesContent(
                     state = state,
@@ -932,6 +935,36 @@ private fun DriveComicDownloadAction(
     }
 }
 
+/** A single comic file row within a folder's listing -- shared by the downloaded and not-yet-downloaded sections in [DriveFolderBrowser] so the two stay visually identical apart from which section they're in. */
+@Composable
+private fun DriveComicFileRow(
+    comic: ComicItem,
+    isDownloading: Boolean,
+    isCached: Boolean,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit,
+    onOpen: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
+        supportingContent = {
+            val label = if (isCached) "${comic.format.name} • Downloaded" else comic.format.name
+            Text(label, color = Color.Gray, fontSize = 12.sp)
+        },
+        leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                DriveComicDownloadAction(isDownloading = isDownloading, isCached = isCached, onDownload = onDownload, onDelete = onDelete)
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+            }
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onOpen() }
+            .background(MaterialTheme.colorScheme.surface)
+    )
+}
+
 /**
  * Folder row's "download everything inside" action. A folder row already carries a favorite star
  * and a navigate-in arrow -- rather than adding a THIRD always-visible icon, downloading (a rarer,
@@ -1169,7 +1202,11 @@ private fun DriveFolderBrowser(
                             )
                             is DriveEntry.ComicFile -> ListItem(
                                 headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
-                                supportingContent = { Text(pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
+                                supportingContent = {
+                                    val base = pathLabel?.let { "$it • ${entry.comic.format.name}" } ?: entry.comic.format.name
+                                    val label = if (entry.comic.id in cachedIds) "$base • Downloaded" else base
+                                    Text(label, color = Color.Gray, fontSize = 12.sp)
+                                },
                                 leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                                 trailingContent = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1208,55 +1245,174 @@ private fun DriveFolderBrowser(
             }
         }
         else -> {
+            val folders = entries.filterIsInstance<DriveEntry.Folder>()
+            val files = entries.filterIsInstance<DriveEntry.ComicFile>()
+            val downloadedFiles = files.filter { it.comic.id in cachedIds }
+            val remainingFiles = files.filter { it.comic.id !in cachedIds }
+
             LazyVerticalGrid(
                 state = gridStates.getOrPut(breadcrumbs.last().folderId) { LazyGridState() },
                 columns = GridCells.Fixed(1),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(entries) { entry ->
-                    when (entry) {
-                        is DriveEntry.Folder -> ListItem(
-                            headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
-                            leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                            trailingContent = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    DriveFolderFavoriteAction(
-                                        isFavorite = entry.id in favoriteFolderIds,
-                                        onToggle = { onToggleFolderFavorite(entry, entry.id in favoriteFolderIds) }
-                                    )
-                                    DriveFolderDownloadAction(
-                                        isDownloading = entry.id in downloadingFolderIds,
-                                        onDownload = { onDownloadFolder(entry.id, entry.name) }
-                                    )
-                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
-                                }
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onNavigateFolder(entry.id, entry.name) }
-                                .background(MaterialTheme.colorScheme.surface)
-                        )
-                        is DriveEntry.ComicFile -> ListItem(
-                            headlineContent = { Text(entry.comic.title, color = Color.White, fontWeight = FontWeight.Bold) },
-                            supportingContent = { Text(entry.comic.format.name, color = Color.Gray, fontSize = 12.sp) },
-                            leadingContent = { Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                            trailingContent = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    DriveComicDownloadAction(
-                                        isDownloading = entry.comic.id in downloadingIds,
-                                        isCached = entry.comic.id in cachedIds,
-                                        onDownload = { onDownloadComic(entry.comic) },
-                                        onDelete = { onDeleteComicCache(entry.comic) }
-                                    )
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
-                                }
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onOpenComic(entry.comic) }
-                                .background(MaterialTheme.colorScheme.surface)
+                items(folders) { entry ->
+                    ListItem(
+                        headlineContent = { Text(entry.name, color = Color.White, fontWeight = FontWeight.Bold) },
+                        leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                DriveFolderFavoriteAction(
+                                    isFavorite = entry.id in favoriteFolderIds,
+                                    onToggle = { onToggleFolderFavorite(entry, entry.id in favoriteFolderIds) }
+                                )
+                                DriveFolderDownloadAction(
+                                    isDownloading = entry.id in downloadingFolderIds,
+                                    onDownload = { onDownloadFolder(entry.id, entry.name) }
+                                )
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                            }
+                        },
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onNavigateFolder(entry.id, entry.name) }
+                            .background(MaterialTheme.colorScheme.surface)
+                    )
+                }
+                // Files already downloaded get their own section (mirroring the Favorites/Recent
+                // split in the saved-links list), so it's obvious at a glance which ones are
+                // available offline -- the "Files" header below it only appears when there's
+                // something left to separate it from; a folder with nothing downloaded yet still
+                // renders as one flat, unheaded list, same as before this split existed.
+                if (downloadedFiles.isNotEmpty()) {
+                    item {
+                        Text("Downloaded", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+                    }
+                    items(downloadedFiles) { entry ->
+                        DriveComicFileRow(
+                            comic = entry.comic,
+                            isDownloading = entry.comic.id in downloadingIds,
+                            isCached = true,
+                            onDownload = { onDownloadComic(entry.comic) },
+                            onDelete = { onDeleteComicCache(entry.comic) },
+                            onOpen = { onOpenComic(entry.comic) }
                         )
                     }
+                    if (remainingFiles.isNotEmpty()) {
+                        item {
+                            Text("Files", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                        }
+                    }
+                }
+                items(remainingFiles) { entry ->
+                    DriveComicFileRow(
+                        comic = entry.comic,
+                        isDownloading = entry.comic.id in downloadingIds,
+                        isCached = false,
+                        onDownload = { onDownloadComic(entry.comic) },
+                        onDelete = { onDeleteComicCache(entry.comic) },
+                        onOpen = { onOpenComic(entry.comic) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Go to Folder tab's "Downloaded" management view -- every file actually on disk right now
+ * (see [ReaderViewModel.showDownloadedFiles]), grouped by the folder it came from, regardless of
+ * which folder is currently favorited/browsed. Lets a user find and delete a downloaded file
+ * without having to remember or re-navigate to whichever folder it originally came from.
+ *
+ * Two-level navigation, mirroring how a real folder browses: first a list of folders that have
+ * at least one downloaded file, then drilling into one shows just its files. [selectedFolder] is
+ * plain Compose state (not ReaderUiState) since it's pure client-side navigation over data
+ * that's already fully loaded -- picking a folder never needs a new fetch.
+ */
+@Composable
+private fun DownloadedFilesView(
+    comics: List<ComicItem>,
+    isLoading: Boolean,
+    onHome: () -> Unit,
+    onOpenComic: (ComicItem) -> Unit,
+    onDelete: (ComicItem) -> Unit
+) {
+    var selectedFolder by remember { mutableStateOf<String?>(null) }
+    val grouped = remember(comics) { comics.groupBy { it.folderName ?: "Unsorted" }.toSortedMap() }
+
+    // If the folder currently drilled into loses its last file (the user just deleted it), bounce
+    // back to the folder list instead of leaving an empty screen with no way out but Home.
+    LaunchedEffect(grouped, selectedFolder) {
+        if (selectedFolder != null && grouped[selectedFolder].isNullOrEmpty()) {
+            selectedFolder = null
+        }
+    }
+
+    BackHandler {
+        if (selectedFolder != null) selectedFolder = null else onHome()
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        IconButton(
+            onClick = { if (selectedFolder != null) selectedFolder = null else onHome() },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(Icons.Default.Home, contentDescription = "Back to Favorites", tint = MaterialTheme.colorScheme.primary)
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        val currentFolder = selectedFolder
+        Row(
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Downloaded",
+                color = if (currentFolder == null) MaterialTheme.colorScheme.primary else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.clickable { selectedFolder = null }
+            )
+            if (currentFolder != null) {
+                Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                Text(currentFolder, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+            }
+        }
+    }
+    Spacer(modifier = Modifier.height(16.dp))
+
+    when {
+        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
+        comics.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            EmptyStateMessage(icon = Icons.Default.Download, text = "No files downloaded yet.")
+        }
+        selectedFolder == null -> {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(grouped.keys.toList()) { folderName ->
+                    val count = grouped[folderName]?.size ?: 0
+                    ListItem(
+                        headlineContent = { Text(folderName, color = Color.White, fontWeight = FontWeight.Bold) },
+                        supportingContent = { Text(if (count == 1) "1 file" else "$count files", color = Color.Gray, fontSize = 12.sp) },
+                        leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                        trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { selectedFolder = folderName }
+                            .background(MaterialTheme.colorScheme.surface)
+                    )
+                }
+            }
+        }
+        else -> {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(grouped[selectedFolder].orEmpty()) { comic ->
+                    DriveComicFileRow(
+                        comic = comic,
+                        isDownloading = false,
+                        isCached = true,
+                        onDownload = {},
+                        onDelete = { onDelete(comic) },
+                        onOpen = { onOpenComic(comic) }
+                    )
                 }
             }
         }
@@ -1287,7 +1443,10 @@ fun JumpToFolderContent(
     onClearJumpToFolder: () -> Unit,
     onDownloadComic: (ComicItem) -> Unit,
     onDeleteComicCache: (ComicItem) -> Unit,
-    onDownloadFolder: (String, String) -> Unit
+    onDownloadFolder: (String, String) -> Unit,
+    onShowDownloadedFiles: () -> Unit,
+    onHideDownloadedFiles: () -> Unit,
+    onDeleteDownloadedComic: (ComicItem) -> Unit
 ) {
     // folderId to the name pre-filled into the dialog -- "" for a brand new favorite, or the
     // existing custom name when reopened via a saved entry's rename (pencil) icon.
@@ -1314,6 +1473,14 @@ fun JumpToFolderContent(
                     }
                 }
             }
+        } else if (state.isViewingDownloadedFiles) {
+            DownloadedFilesView(
+                comics = state.downloadedComics,
+                isLoading = state.isLoadingDownloadedFiles,
+                onHome = onHideDownloadedFiles,
+                onOpenComic = onOpenComic,
+                onDelete = onDeleteDownloadedComic
+            )
         } else {
             // The paste-a-link row only makes sense before you've drilled into a folder -- once a
             // specific folder is open, DriveFolderBrowser's own breadcrumb row (Home icon + folder
@@ -1345,6 +1512,24 @@ fun JumpToFolderContent(
                     IconButton(onClick = { showFavoritesSheet = true }, modifier = Modifier.size(32.dp)) {
                         Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
                     }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                // A top-level entry point to every downloaded file across every folder -- separate
+                // from browsing any one folder's own Downloaded/Files split, this is for managing
+                // (viewing, deleting) the whole set at once without hunting through each folder.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onShowDownloadedFiles() }
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(12.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Downloaded", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                 }
                 Spacer(modifier = Modifier.height(12.dp))
             }

@@ -49,6 +49,25 @@ class DriveDownloadStore(private val downloadsRoot: File) {
         destinationFor(folderName, title).delete()
     }
 
+    /** One file actually sitting on disk under this store's root, as found by [listAll]. */
+    data class DownloadedFile(val folderName: String, val title: String, val file: File)
+
+    /**
+     * Lists every downloaded file actually present on disk, grouped by the subfolder (Drive
+     * folder name) it lives under -- the ground truth for a "manage all downloads" view, since it
+     * reflects files sitting here from ANY source (including a "download all files in this
+     * folder" batch whose comics were never individually opened, so they'd never show up in
+     * DriveLibraryRepository -- see its own doc comment). Skips ".part" files, which are still
+     * mid-download and not yet real entries.
+     */
+    fun listAll(): List<DownloadedFile> {
+        val folderDirs = downloadsRoot.listFiles { f -> f.isDirectory } ?: return emptyList()
+        return folderDirs.flatMap { folderDir ->
+            val files = folderDir.listFiles { f -> f.isFile && !f.name.endsWith(".part") } ?: emptyArray()
+            files.map { file -> DownloadedFile(folderName = folderDir.name, title = file.name, file = file) }
+        }
+    }
+
     /** Deletes every downloaded comic (and any leftover ".part" temp file) under this store's root. */
     fun clearAll() {
         downloadsRoot.deleteRecursively()

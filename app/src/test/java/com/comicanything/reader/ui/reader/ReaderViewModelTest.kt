@@ -565,6 +565,78 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `showDownloadedFiles lists every file on disk across folders, grouped by folderName`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val store = com.comicanything.reader.data.repository.DriveDownloadStore(tempFolder.newFolder("downloads-3"))
+        store.download("Kotaro", "Chapter1.pdf") { it.writeText("a") }
+        store.download("Naruto", "Chapter1.cbz") { it.writeText("b") }
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            driveDownloadStore = { store }
+        )
+
+        viewModel.showDownloadedFiles()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isViewingDownloadedFiles)
+        assertFalse(viewModel.uiState.value.isLoadingDownloadedFiles)
+        val comics = viewModel.uiState.value.downloadedComics
+        assertEquals(2, comics.size)
+        assertEquals(setOf("Kotaro" to "Chapter1.pdf", "Naruto" to "Chapter1.cbz"), comics.map { it.folderName to it.title }.toSet())
+        assertEquals(setOf(ComicFormat.PDF, ComicFormat.CBZ), comics.map { it.format }.toSet())
+    }
+
+    @Test
+    fun `hideDownloadedFiles closes the Downloaded view without clearing its list`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val store = com.comicanything.reader.data.repository.DriveDownloadStore(tempFolder.newFolder("downloads-4"))
+        store.download("Kotaro", "Chapter1.pdf") { it.writeText("a") }
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            driveDownloadStore = { store }
+        )
+        viewModel.showDownloadedFiles()
+        advanceUntilIdle()
+
+        viewModel.hideDownloadedFiles()
+
+        assertFalse(viewModel.uiState.value.isViewingDownloadedFiles)
+        assertEquals(1, viewModel.uiState.value.downloadedComics.size)
+    }
+
+    @Test
+    fun `deleteDownloadedComic removes the file from disk and from the Downloaded view's list`() = runTest {
+        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
+        val store = com.comicanything.reader.data.repository.DriveDownloadStore(tempFolder.newFolder("downloads-5"))
+        store.download("Kotaro", "Chapter1.pdf") { it.writeText("a") }
+        store.download("Kotaro", "Chapter2.pdf") { it.writeText("b") }
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            localRepo = repo,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            driveDownloadStore = { store }
+        )
+        viewModel.showDownloadedFiles()
+        advanceUntilIdle()
+        val toDelete = viewModel.uiState.value.downloadedComics.first { it.title == "Chapter1.pdf" }
+
+        viewModel.deleteDownloadedComic(toDelete)
+
+        assertNull(store.cachedFile("Kotaro", "Chapter1.pdf"))
+        assertEquals(listOf("Chapter2.pdf"), viewModel.uiState.value.downloadedComics.map { it.title })
+    }
+
+    @Test
     fun `navigateDriveFolder without a connected token sets a not-connected error and never calls the repository`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(

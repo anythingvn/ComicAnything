@@ -116,6 +116,26 @@ class DriveDownloadStoreTest {
     }
 
     @Test
+    fun `listAll returns every downloaded file grouped by its folder, skipping part files`() = runTest {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
+        store.download("Kotaro", "Chapter1.pdf") { dest -> dest.writeText("a") }
+        store.download("Kotaro", "Chapter2.pdf") { dest -> dest.writeText("b") }
+        store.download("Naruto", "Chapter1.pdf") { dest -> dest.writeText("c") }
+
+        val all = store.listAll()
+
+        assertEquals(3, all.size)
+        assertEquals(setOf("Kotaro" to "Chapter1.pdf", "Kotaro" to "Chapter2.pdf", "Naruto" to "Chapter1.pdf"), all.map { it.folderName to it.title }.toSet())
+    }
+
+    @Test
+    fun `listAll returns an empty list when nothing has been downloaded yet`() {
+        val store = DriveDownloadStore(tempFolder.newFolder("downloads-empty"))
+
+        assertTrue(store.listAll().isEmpty())
+    }
+
+    @Test
     fun `a title containing filesystem-unsafe characters is sanitized instead of failing`() = runTest {
         val store = DriveDownloadStore(tempFolder.newFolder("downloads"))
 

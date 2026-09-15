@@ -37,10 +37,20 @@ class ServiceBoundDriveDownloadCoordinator(private val context: Context) : Drive
     private var accessToken: String? = null
     private var bound = false
 
+    // Set once bound, so refreshCachedStatus (a local disk check, not an actual download) can call
+    // straight into the service's own coordinator instead of going through send()'s
+    // startForegroundService -- every other action here is a real download/delete that belongs in
+    // the foreground service, but startForegroundService unconditionally shows the "Downloading"
+    // notification for a moment (onStartCommand calls it before looking at the action), which
+    // would flash a spurious notification on every folder browse if reused for this.
+    @Volatile
+    private var boundCoordinator: DriveDownloadCoordinator? = null
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             bound = true
             (binder as? DriveDownloadService.LocalBinder)?.let { localBinder ->
+                boundCoordinator = localBinder.coordinator
                 scope.launch {
                     localBinder.coordinator.state.collect { _state.value = it }
                 }
@@ -49,6 +59,7 @@ class ServiceBoundDriveDownloadCoordinator(private val context: Context) : Drive
 
         override fun onServiceDisconnected(name: ComponentName?) {
             bound = false
+            boundCoordinator = null
         }
     }
 
@@ -81,6 +92,12 @@ class ServiceBoundDriveDownloadCoordinator(private val context: Context) : Drive
             putExtra(DriveDownloadService.EXTRA_FOLDER_NAME, folderName)
             putExtra(DriveDownloadService.EXTRA_TOKEN, accessToken)
         }
+    }
+
+    override fun refreshCachedStatus(comics: List<ComicItem>) {
+        // Silently skipped if not bound yet (a brief window right after construction) -- the next
+        // folder fetch calls this again, so a missed reconciliation here is never permanent.
+        boundCoordinator?.refreshCachedStatus(comics)
     }
 
     override fun clearCache() {

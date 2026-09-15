@@ -41,6 +41,16 @@ interface DriveDownloadCoordinator {
     fun deleteCache(comic: ComicItem)
     /** [folderName] is stamped onto every comic downloaded from [folderId], so they land in Download/ComicAnything/<folderName>. */
     fun enqueueFolder(folderId: String, folderName: String)
+    /**
+     * Checks each of [comics] against what's actually on disk in the download store and merges
+     * any that are already there into [state]'s cachedIds. [state].cachedIds only tracks what
+     * THIS coordinator instance has itself downloaded/deleted since it was created -- it has no
+     * memory of downloads from a previous app process, so right after a cold start every comic
+     * looks "not downloaded" even though its file is still sitting in Download/ComicAnything from
+     * last time. Called whenever a folder's contents are fetched, so the UI's "Downloaded" label
+     * and delete-vs-download icon reflect reality instead of resetting on every relaunch.
+     */
+    fun refreshCachedStatus(comics: List<ComicItem>)
     fun clearCache()
     fun cancelAll()
     /** No-op for [DefaultDriveDownloadCoordinator], which reads its token lazily instead; overridden by ServiceBoundDriveDownloadCoordinator, which has no access to that lazy supplier. */
@@ -132,6 +142,16 @@ class DefaultDriveDownloadCoordinator(
                     batchCompleted = 0
                 )
             }
+        }
+    }
+
+    override fun refreshCachedStatus(comics: List<ComicItem>) {
+        val store = driveDownloadStore()
+        val newlyConfirmed = comics
+            .filter { it.id !in _state.value.cachedIds && store.cachedFile(it.folderName, it.title) != null }
+            .map { it.id }
+        if (newlyConfirmed.isNotEmpty()) {
+            _state.value = _state.value.copy(cachedIds = _state.value.cachedIds + newlyConfirmed)
         }
     }
 

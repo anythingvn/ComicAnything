@@ -125,16 +125,23 @@ data class ReaderUiState(
     // tap, or one being processed as part of a folder batch) -- drives the spinner shown in place
     // of the download/delete icon on that row.
     val driveDownloadingIds: Set<String> = emptySet(),
-    // Drive file ids known to have a cached copy on disk (see DriveFileCache), maintained purely
-    // by this session's own downloadDriveComic/downloadDriveFolder/deleteDriveComicCache/
+    // Drive file ids known to have a downloaded copy on disk (see DriveDownloadStore), updated by
+    // this session's own downloadDriveComic/downloadDriveFolder/deleteDriveComicCache/
     // clearDriveCache calls -- drives whether a row shows the download icon or the delete icon.
-    // Deliberately NOT reconciled against the filesystem when a folder's entries load: a file
-    // cached in an earlier session (or by a previous downloadDriveFolder run) just shows the
-    // download icon again until re-downloaded, which is a much cheaper and simpler contract than
-    // stat-ing every visible entry's cache file on every folder open.
+    // Also reconciled against the filesystem every time a folder's entries load (see
+    // DriveDownloadCoordinator.refreshCachedStatus), since a file downloaded in an EARLIER app
+    // process would otherwise look undownloaded until re-tapped -- this coordinator instance has
+    // no memory of that process's downloads, only of what's actually still on disk.
     val driveCachedIds: Set<String> = emptySet(),
     // Folder ids currently running a "download everything directly in this folder" batch.
-    val driveDownloadingFolderIds: Set<String> = emptySet()
+    val driveDownloadingFolderIds: Set<String> = emptySet(),
+    // Backs the Go to Folder tab's "Downloaded" management view -- every file DriveDownloadStore
+    // finds on disk right now, across every folder, rebuilt fresh each time that view is opened
+    // (see showDownloadedFiles) rather than kept live, since it's a deliberate "check what I have"
+    // action rather than something the rest of the UI needs to react to continuously.
+    val downloadedComics: List<ComicItem> = emptyList(),
+    val isViewingDownloadedFiles: Boolean = false,
+    val isLoadingDownloadedFiles: Boolean = false
 )
 
 sealed interface PageLoadState {
@@ -393,6 +400,31 @@ class ReaderViewModel @JvmOverloads constructor(
         if (entry is DriveEntry.ComicFile) DriveEntry.ComicFile(entry.comic.copy(folderName = folderName)) else entry
     }
 
+    /**
+     * Reconciles the coordinator's cachedIds against what's actually on disk for [entries]' comic
+     * files -- see [DriveDownloadCoordinator.refreshCachedStatus] for why this is needed (its
+     * cachedIds only remembers downloads from THIS app process, so a relaunch otherwise makes
+     * every already-downloaded comic look undownloaded until re-tapped). Runs the disk check on
+     * ioDispatcher since it's synchronous file I/O, not a suspend function.
+     *
+     * Best-effort: this is a nice-to-have reconciliation, not core to displaying the folder, so
+     * any failure (e.g. storage briefly unavailable) is swallowed here rather than surfacing as a
+     * driveError/jumpToError that would hide the folder listing this call is layered on top of.
+     */
+    private suspend fun refreshCachedStatus(entries: List<DriveEntry>) {
+        val comics = entries.filterIsInstance<DriveEntry.ComicFile>().map { it.comic }
+        if (comics.isEmpty()) return
+        try {
+            withContext(ioDispatcher) {
+                driveDownloadCoordinator.refreshCachedStatus(comics)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // See doc comment above -- deliberately not surfaced.
+        }
+    }
+
     private fun fetchCurrentDriveFolder() {
         val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
         viewModelScope.launch {
@@ -407,6 +439,7 @@ class ReaderViewModel @JvmOverloads constructor(
             }
             try {
                 val entries = fetchDriveFolderContents(current.folderId, token).stampFolderName(current.name)
+                refreshCachedStatus(entries)
                 _uiState.value = _uiState.value.copy(driveEntries = entries, isLoadingDrive = false)
             } catch (e: CancellationException) {
                 throw e
@@ -442,6 +475,55 @@ class ReaderViewModel @JvmOverloads constructor(
     /** Clears every Drive file currently cached on disk. */
     fun clearDriveCache() {
         driveDownloadCoordinator.clearCache()
+    }
+
+    /**
+     * Opens the Go to Folder tab's "Downloaded" management view and (re-)scans disk for what's
+     * actually there right now, across every folder -- a deliberate point-in-time check rather
+     * than something kept continuously live, so downloading/deleting elsewhere in the app while
+     * this view is open won't retroactively update it until it's reopened.
+     */
+    fun showDownloadedFiles() {
+        _uiState.value = _uiState.value.copy(isViewingDownloadedFiles = true, isLoadingDownloadedFiles = true)
+        viewModelScope.launch {
+            val comics = withContext(ioDispatcher) {
+                driveDownloadStore().listAll().map { downloaded ->
+                    ComicItem(
+                        // Derived from the file's own path rather than a real Drive file id --
+                        // this view is built from what's on disk (DriveDownloadStore.listAll), not
+                        // from Drive API listings, so no such id is available for a comic that was
+                        // batch-downloaded via "Download all files" and never individually opened.
+                        // Stable across rescans since the path doesn't change, which is all
+                        // reading progress/persistence needs.
+                        id = downloaded.file.absolutePath.hashCode().toString(),
+                        title = downloaded.title,
+                        pathOrUrl = downloaded.file.absolutePath,
+                        source = ComicSource.LOCAL,
+                        format = formatForFileName(downloaded.title),
+                        folderName = downloaded.folderName
+                    )
+                }
+            }
+            _uiState.value = _uiState.value.copy(downloadedComics = comics, isLoadingDownloadedFiles = false)
+        }
+    }
+
+    /** Returns the Go to Folder tab from the "Downloaded" management view back to the Favorites/Recent list. */
+    fun hideDownloadedFiles() {
+        _uiState.value = _uiState.value.copy(isViewingDownloadedFiles = false)
+    }
+
+    /** Deletes [comic]'s file from disk and removes it from the currently-open Downloaded view's own list. */
+    fun deleteDownloadedComic(comic: ComicItem) {
+        driveDownloadCoordinator.deleteCache(comic)
+        _uiState.value = _uiState.value.copy(downloadedComics = _uiState.value.downloadedComics.filterNot { it.id == comic.id })
+    }
+
+    private fun formatForFileName(name: String): ComicFormat = when {
+        name.endsWith(".cbz", ignoreCase = true) -> ComicFormat.CBZ
+        name.endsWith(".cbr", ignoreCase = true) -> ComicFormat.CBR
+        name.endsWith(".epub", ignoreCase = true) -> ComicFormat.EPUB
+        else -> ComicFormat.PDF
     }
 
     /**
@@ -592,6 +674,7 @@ class ReaderViewModel @JvmOverloads constructor(
             }
             try {
                 val entries = fetchDriveFolderContents(current.folderId, token).stampFolderName(current.name)
+                refreshCachedStatus(entries)
                 _uiState.value = _uiState.value.copy(jumpToEntries = entries, isLoadingJumpTo = false)
             } catch (e: CancellationException) {
                 throw e
