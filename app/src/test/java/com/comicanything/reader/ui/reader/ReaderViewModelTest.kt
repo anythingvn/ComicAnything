@@ -310,30 +310,7 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `navigateDriveFolder pushes a breadcrumb and populates driveEntries on success`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveAccessToken = { "token" },
-            fetchDriveFolderContents = { _, _ -> fakeEntries }
-        )
-
-        viewModel.navigateDriveFolder("root", "My Drive")
-        advanceUntilIdle()
-
-        assertEquals(listOf("My Drive"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
-        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
-        assertNull(viewModel.uiState.value.driveError)
-        assertFalse(viewModel.uiState.value.isLoadingDrive)
-    }
-
-    @Test
-    fun `navigateDriveFolder surfaces a DriveApiException from the fetch as driveError`() = runTest {
+    fun `navigateToLinkedFolderInJumpTab surfaces a DriveApiException from the fetch as jumpToError`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -341,19 +318,20 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> throw DriveApiException("Couldn't reach Google Drive -- check your connection") }
         )
 
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
 
-        assertEquals("Couldn't reach Google Drive -- check your connection", viewModel.uiState.value.driveError)
-        assertFalse(viewModel.uiState.value.isLoadingDrive)
+        assertEquals("Couldn't reach Google Drive -- check your connection", viewModel.uiState.value.jumpToError)
+        assertFalse(viewModel.uiState.value.isLoadingJumpTo)
     }
 
     @Test
-    fun `navigateDriveFolder surfaces a generic exception as driveError instead of crashing`() = runTest {
+    fun `navigateToLinkedFolderInJumpTab surfaces a generic exception as jumpToError instead of crashing`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -361,26 +339,27 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> throw IllegalStateException("boom") }
         )
 
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
 
-        // Proves fetchCurrentDriveFolder's catch was widened from `catch (e: DriveApiException)`
+        // Proves fetchCurrentJumpToFolder's catch was widened from `catch (e: DriveApiException)`
         // to also catch plain Exception. GoogleDriveRepository can throw more than
         // DriveApiException from deep inside response.use { } (a raw IOException from a dropped
         // connection mid-read, or a JSONException from a non-JSON response body) -- this fake uses
         // a plain IllegalStateException to prove the VM-level widening independently of the
         // repository layer's own widening: without it, this exception would propagate out of
-        // viewModelScope.launch uncaught and crash the app instead of landing in driveError.
-        assertEquals("boom", viewModel.uiState.value.driveError)
-        assertFalse(viewModel.uiState.value.isLoadingDrive)
+        // viewModelScope.launch uncaught and crash the app instead of landing in jumpToError.
+        assertEquals("boom", viewModel.uiState.value.jumpToError)
+        assertFalse(viewModel.uiState.value.isLoadingJumpTo)
     }
 
     @Test
-    fun `updateDriveAccessToken automatically retries a folder fetch that previously failed for lack of a token`() = runTest {
+    fun `updateDriveAccessToken automatically retries a jump-to-folder fetch that previously failed for lack of a token`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val fakeEntries = listOf(DriveEntry.Folder(id = "sub1", name = "Comics"))
         val viewModel = ReaderViewModel(
@@ -389,28 +368,29 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             // Deliberately NOT overriding driveAccessToken here -- its default reads
             // pushedDriveAccessToken, which is exactly what updateDriveAccessToken() writes to.
             // Overriding it with a fixed lambda (like the other tests in this file do) would
             // bypass the push mechanism this test needs to exercise. fetchDriveFolderContents is
             // only ever reached once a non-null token is present (see the short-circuit in
-            // fetchCurrentDriveFolder), so it's safe for this fake to unconditionally succeed.
+            // fetchCurrentJumpToFolder), so it's safe for this fake to unconditionally succeed.
             fetchDriveFolderContents = { _, _ -> fakeEntries }
         )
 
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
-        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.driveError)
-        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.jumpToError)
+        assertTrue(viewModel.uiState.value.jumpToEntries.isEmpty())
 
         viewModel.updateDriveAccessToken("real-token")
         advanceUntilIdle()
 
         // This is the mechanism that fixes the cold-start race (Finding 6): when a real token
-        // arrives while a driveError from an earlier attempt is still showing, the folder is
+        // arrives while a jumpToError from an earlier attempt is still showing, the folder is
         // automatically re-fetched instead of leaving the user stuck on a stale error.
-        assertNull(viewModel.uiState.value.driveError)
-        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
+        assertNull(viewModel.uiState.value.jumpToError)
+        assertEquals(fakeEntries, viewModel.uiState.value.jumpToEntries)
     }
 
     @Test
@@ -582,34 +562,11 @@ class ReaderViewModelTest {
         viewModel.showDownloadedFiles()
         advanceUntilIdle()
 
-        assertTrue(viewModel.uiState.value.isViewingDownloadedFiles)
         assertFalse(viewModel.uiState.value.isLoadingDownloadedFiles)
         val comics = viewModel.uiState.value.downloadedComics
         assertEquals(2, comics.size)
         assertEquals(setOf("Kotaro" to "Chapter1.pdf", "Naruto" to "Chapter1.cbz"), comics.map { it.folderName to it.title }.toSet())
         assertEquals(setOf(ComicFormat.PDF, ComicFormat.CBZ), comics.map { it.format }.toSet())
-    }
-
-    @Test
-    fun `hideDownloadedFiles closes the Downloaded view without clearing its list`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val store = com.comicanything.reader.data.repository.DriveDownloadStore(tempFolder.newFolder("downloads-4"))
-        store.download("Kotaro", "Chapter1.pdf") { it.writeText("a") }
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveDownloadStore = { store }
-        )
-        viewModel.showDownloadedFiles()
-        advanceUntilIdle()
-
-        viewModel.hideDownloadedFiles()
-
-        assertFalse(viewModel.uiState.value.isViewingDownloadedFiles)
-        assertEquals(1, viewModel.uiState.value.downloadedComics.size)
     }
 
     @Test
@@ -637,7 +594,7 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `navigateDriveFolder without a connected token sets a not-connected error and never calls the repository`() = runTest {
+    fun `navigateJumpToUp truncates breadcrumbs to the tapped level`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -645,18 +602,25 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveAccessToken = { null }
+            savedDriveLinkRepo = { savedDriveLinkRepo },
+            driveAccessToken = { null } // forces a fast, deterministic jumpToError instead of a real network call
         )
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
+        advanceUntilIdle()
+        viewModel.navigateJumpToFolder("sub1", "Comics")
+        advanceUntilIdle()
+        viewModel.navigateJumpToFolder("sub2", "Volume 1")
+        advanceUntilIdle()
+        assertEquals(listOf("My Drive", "Comics", "Volume 1"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.name })
 
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateJumpToUp(1)
         advanceUntilIdle()
 
-        assertEquals("Connect your Google Drive to browse it", viewModel.uiState.value.driveError)
-        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
+        assertEquals(listOf("My Drive", "Comics"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.name })
     }
 
     @Test
-    fun `navigateDriveUp truncates breadcrumbs to the tapped level`() = runTest {
+    fun `disconnectDrive clears jumpToEntries, breadcrumbs, and jumpToError`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -664,76 +628,23 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveAccessToken = { null } // forces a fast, deterministic driveError instead of a real network call
-        )
-        viewModel.navigateDriveFolder("root", "My Drive")
-        advanceUntilIdle()
-        viewModel.navigateDriveFolder("sub1", "Comics")
-        advanceUntilIdle()
-        viewModel.navigateDriveFolder("sub2", "Volume 1")
-        advanceUntilIdle()
-        assertEquals(listOf("My Drive", "Comics", "Volume 1"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
-
-        viewModel.navigateDriveUp(1)
-        advanceUntilIdle()
-
-        assertEquals(listOf("My Drive", "Comics"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
-    }
-
-    @Test
-    fun `disconnectDrive clears driveEntries, breadcrumbs, and driveError`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { null }
         )
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isNotEmpty())
-        assertTrue(viewModel.uiState.value.driveError != null)
+        assertTrue(viewModel.uiState.value.jumpToBreadcrumbs.isNotEmpty())
+        assertTrue(viewModel.uiState.value.jumpToError != null)
 
         viewModel.disconnectDrive()
 
-        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
-        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
-        assertNull(viewModel.uiState.value.driveError)
+        assertTrue(viewModel.uiState.value.jumpToBreadcrumbs.isEmpty())
+        assertTrue(viewModel.uiState.value.jumpToEntries.isEmpty())
+        assertNull(viewModel.uiState.value.jumpToError)
     }
 
     @Test
-    fun `searchDriveTree populates driveSearchResults from the current folder`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val fakeHits = listOf(
-            com.comicanything.reader.data.repository.DriveSearchHit(
-                DriveEntry.Folder(id = "sub1", name = "Comics"),
-                parentPath = emptyList()
-            )
-        )
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveAccessToken = { "token" },
-            fetchDriveFolderContents = { _, _ -> emptyList() },
-            searchDriveFolderTree = { _, _, _ -> fakeHits }
-        )
-        viewModel.navigateDriveFolder("root", "My Drive")
-        advanceUntilIdle()
-
-        viewModel.searchDriveTree("com")
-        advanceUntilIdle()
-
-        assertEquals(fakeHits, viewModel.uiState.value.driveSearchResults)
-        assertFalse(viewModel.uiState.value.isSearchingDriveTree)
-    }
-
-    @Test
-    fun `searchDriveTree with a blank query clears any active search instead of running one`() = runTest {
+    fun `searchJumpToTree with a blank query clears any active search instead of running one`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         var callCount = 0
         val viewModel = ReaderViewModel(
@@ -742,25 +653,26 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> callCount++; emptyList() }
         )
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
-        viewModel.searchDriveTree("comics")
+        viewModel.searchJumpToTree("comics")
         advanceUntilIdle()
         assertEquals(1, callCount)
 
-        viewModel.searchDriveTree("")
+        viewModel.searchJumpToTree("")
         advanceUntilIdle()
 
-        assertNull(viewModel.uiState.value.driveSearchResults)
+        assertNull(viewModel.uiState.value.jumpToSearchResults)
         assertEquals(1, callCount)
     }
 
     @Test
-    fun `searchDriveTree surfaces a failed search as an error instead of reporting it as no matches`() = runTest {
+    fun `searchJumpToTree surfaces a failed search as an error instead of reporting it as no matches`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -768,23 +680,24 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> throw DriveApiException("token expired") }
         )
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
 
-        viewModel.searchDriveTree("comics")
+        viewModel.searchJumpToTree("comics")
         advanceUntilIdle()
 
-        assertNull(viewModel.uiState.value.driveSearchResults)
-        assertEquals("token expired", viewModel.uiState.value.driveSearchError)
-        assertFalse(viewModel.uiState.value.isSearchingDriveTree)
+        assertNull(viewModel.uiState.value.jumpToSearchResults)
+        assertEquals("token expired", viewModel.uiState.value.jumpToSearchError)
+        assertFalse(viewModel.uiState.value.isSearchingJumpToTree)
     }
 
     @Test
-    fun `searchDriveTree with no access token surfaces an error instead of reporting it as no matches`() = runTest {
+    fun `searchJumpToTree with no access token surfaces an error instead of reporting it as no matches`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
             application = fakeApplication,
@@ -792,46 +705,19 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { null },
             fetchDriveFolderContents = { _, _ -> emptyList() },
             searchDriveFolderTree = { _, _, _ -> emptyList() }
         )
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
 
-        viewModel.searchDriveTree("comics")
+        viewModel.searchJumpToTree("comics")
         advanceUntilIdle()
 
-        assertNull(viewModel.uiState.value.driveSearchResults)
-        assertEquals("Not connected to Google Drive", viewModel.uiState.value.driveSearchError)
-    }
-
-    @Test
-    fun `navigateDriveToBreadcrumbs replaces the trail, fetches that folder, and clears the search`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val fakeEntries = listOf(DriveEntry.Folder(id = "sub2", name = "Manga"))
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            driveAccessToken = { "token" },
-            fetchDriveFolderContents = { _, _ -> fakeEntries },
-            searchDriveFolderTree = { _, _, _ -> listOf(com.comicanything.reader.data.repository.DriveSearchHit(DriveEntry.Folder("sub1", "Comics"), emptyList())) }
-        )
-        viewModel.navigateDriveFolder("root", "My Drive")
-        advanceUntilIdle()
-        viewModel.searchDriveTree("comics")
-        advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.driveSearchResults != null)
-
-        viewModel.navigateDriveToBreadcrumbs(listOf(DriveBreadcrumb("root", "My Drive"), DriveBreadcrumb("sub1", "Comics")))
-        advanceUntilIdle()
-
-        assertEquals(listOf("My Drive", "Comics"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
-        assertEquals(fakeEntries, viewModel.uiState.value.driveEntries)
-        assertNull(viewModel.uiState.value.driveSearchResults)
+        assertNull(viewModel.uiState.value.jumpToSearchResults)
+        assertEquals("Not connected to Google Drive", viewModel.uiState.value.jumpToSearchError)
     }
 
     @Test
@@ -859,34 +745,7 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `jump-to-folder browsing is independent from the main Google Drive tab's breadcrumbs and entries`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val driveEntries = listOf(DriveEntry.Folder(id = "d1", name = "MyDriveFolder"))
-        val jumpEntries = listOf(DriveEntry.Folder(id = "j1", name = "SharedFolder"))
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            savedDriveLinkRepo = { savedDriveLinkRepo },
-            driveAccessToken = { "token" },
-            fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else jumpEntries }
-        )
-
-        viewModel.navigateDriveFolder("root", "My Drive")
-        advanceUntilIdle()
-        viewModel.navigateToLinkedFolderInJumpTab("shared-id")
-        advanceUntilIdle()
-
-        assertEquals(listOf("My Drive"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
-        assertEquals(driveEntries, viewModel.uiState.value.driveEntries)
-        assertEquals(listOf("shared-id"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.folderId })
-        assertEquals(jumpEntries, viewModel.uiState.value.jumpToEntries)
-    }
-
-    @Test
-    fun `navigateJumpToFolder descends from wherever the jump tab already is, not from the main Drive tab`() = runTest {
+    fun `navigateJumpToFolder descends from wherever the jump tab already is`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val nestedEntries = listOf(DriveEntry.ComicFile(ComicItem(id = "c1", title = "vol1.cbz", pathOrUrl = "https://x/c1", source = ComicSource.GOOGLE_DRIVE, format = ComicFormat.CBZ)))
         // stampFolderName tags each fetched comic with the breadcrumb name it was found under
@@ -912,7 +771,6 @@ class ReaderViewModelTest {
 
         assertEquals(listOf("shared-root", "Nested"), viewModel.uiState.value.jumpToBreadcrumbs.map { it.name })
         assertEquals(nestedEntriesWithFolderName, viewModel.uiState.value.jumpToEntries)
-        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
     }
 
     @Test
@@ -937,7 +795,6 @@ class ReaderViewModelTest {
         advanceUntilIdle()
 
         assertEquals(fakeHits, viewModel.uiState.value.jumpToSearchResults)
-        assertNull(viewModel.uiState.value.driveSearchResults)
         assertFalse(viewModel.uiState.value.isSearchingJumpToTree)
     }
 
@@ -992,28 +849,6 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `navigateToLinkedFolderInJumpTab records the folder as a recent saved link`() = runTest {
-        val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val viewModel = ReaderViewModel(
-            application = fakeApplication,
-            localRepo = repo,
-            ioDispatcher = Dispatchers.Unconfined,
-            progressRepo = progressRepo,
-            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
-            savedDriveLinkRepo = { savedDriveLinkRepo },
-            driveAccessToken = { "token" },
-            fetchDriveFolderContents = { _, _ -> emptyList() }
-        )
-
-        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
-        advanceUntilIdle()
-
-        val saved = viewModel.uiState.value.savedDriveLinks.single()
-        assertEquals("shared-root", saved.folderId)
-        assertFalse(saved.isFavorite)
-    }
-
-    @Test
     fun `setFolderFavorite stars a folder with a custom name`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
         val viewModel = ReaderViewModel(
@@ -1026,8 +861,6 @@ class ReaderViewModelTest {
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() }
         )
-        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
-        advanceUntilIdle()
 
         viewModel.setFolderFavorite("shared-root", isFavorite = true, customName = "My Comics")
         advanceUntilIdle()
@@ -1050,7 +883,7 @@ class ReaderViewModelTest {
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> emptyList() }
         )
-        viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        viewModel.setFolderFavorite("shared-root", isFavorite = true)
         advanceUntilIdle()
         assertTrue(viewModel.uiState.value.savedDriveLinks.isNotEmpty())
 
@@ -1061,9 +894,8 @@ class ReaderViewModelTest {
     }
 
     @Test
-    fun `clearJumpToFolder resets the jump tab to its starting state without touching saved links or the main Drive tab`() = runTest {
+    fun `clearJumpToFolder resets the jump tab to its starting state without touching saved links`() = runTest {
         val repo = LocalFileRepository(rootPath = tempFolder.root.absolutePath, ioDispatcher = Dispatchers.Unconfined)
-        val driveEntries = listOf(DriveEntry.Folder(id = "d1", name = "MyDriveFolder"))
         val viewModel = ReaderViewModel(
             application = fakeApplication,
             localRepo = repo,
@@ -1072,11 +904,11 @@ class ReaderViewModelTest {
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
             savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
-            fetchDriveFolderContents = { folderId, _ -> if (folderId == "root") driveEntries else emptyList() }
+            fetchDriveFolderContents = { _, _ -> emptyList() }
         )
-        viewModel.navigateDriveFolder("root", "My Drive")
-        advanceUntilIdle()
         viewModel.navigateToLinkedFolderInJumpTab("shared-root")
+        advanceUntilIdle()
+        viewModel.setFolderFavorite("shared-root", isFavorite = true)
         advanceUntilIdle()
         viewModel.searchJumpToTree("anything")
         advanceUntilIdle()
@@ -1087,12 +919,9 @@ class ReaderViewModelTest {
         assertTrue(viewModel.uiState.value.jumpToBreadcrumbs.isEmpty())
         assertTrue(viewModel.uiState.value.jumpToEntries.isEmpty())
         assertNull(viewModel.uiState.value.jumpToSearchResults)
-        // The saved-link record from the jump above must survive being cleared -- clearing is
-        // just "go back to the list," not "forget this folder existed."
+        // The favorite saved above must survive being cleared -- clearing is just "go back to
+        // the list," not "forget this folder existed."
         assertTrue(viewModel.uiState.value.savedDriveLinks.any { it.folderId == "shared-root" })
-        // And the main Google Drive tab's own breadcrumb trail must be untouched.
-        assertEquals(listOf("My Drive"), viewModel.uiState.value.driveBreadcrumbs.map { it.name })
-        assertEquals(driveEntries, viewModel.uiState.value.driveEntries)
     }
 
     @Test
@@ -1686,28 +1515,23 @@ class ReaderViewModelTest {
             ioDispatcher = Dispatchers.Unconfined,
             progressRepo = progressRepo,
             connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo },
+            savedDriveLinkRepo = { savedDriveLinkRepo },
             driveAccessToken = { "token" },
             fetchDriveFolderContents = { _, _ -> fakeEntries }
         )
         viewModel.onDriveAuthorized("first@example.com")
-        viewModel.navigateDriveFolder("root", "My Drive")
+        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
         advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isNotEmpty())
-        assertTrue(viewModel.uiState.value.driveEntries.isNotEmpty())
-
-        val versionBeforeSwitch = viewModel.uiState.value.driveConnectionVersion
+        assertTrue(viewModel.uiState.value.jumpToBreadcrumbs.isNotEmpty())
+        assertTrue(viewModel.uiState.value.jumpToEntries.isNotEmpty())
 
         // Simulates MainActivity.switchDriveAccount(): re-authorizing with a DIFFERENT account
         // while old browsing state (a folder ID from the first account's Drive) is still around.
         viewModel.onDriveAuthorized("second@example.com")
 
         assertEquals("second@example.com", viewModel.uiState.value.driveAccountEmail)
-        assertTrue(viewModel.uiState.value.driveBreadcrumbs.isEmpty())
-        assertTrue(viewModel.uiState.value.driveEntries.isEmpty())
-        // DriveContent's auto-navigate-to-root LaunchedEffect keys on this field specifically
-        // because isDriveConnected alone doesn't change value on a switch-while-connected -- see
-        // the field's doc comment in ReaderUiState for why that would otherwise get the UI stuck.
-        assertTrue(viewModel.uiState.value.driveConnectionVersion > versionBeforeSwitch)
+        assertTrue(viewModel.uiState.value.jumpToBreadcrumbs.isEmpty())
+        assertTrue(viewModel.uiState.value.jumpToEntries.isEmpty())
     }
 
     @Test

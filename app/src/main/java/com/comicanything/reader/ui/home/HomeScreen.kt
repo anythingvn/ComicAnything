@@ -158,12 +158,6 @@ fun HomeScreen(
     LaunchedEffect(homeScreenState.searchQuery, homeScreenState.selectedTab) {
         when (homeScreenState.selectedTab) {
             1 -> if (homeScreenState.searchQuery.isBlank()) {
-                viewModel.clearDriveSearch()
-            } else {
-                delay(400)
-                viewModel.searchDriveTree(homeScreenState.searchQuery)
-            }
-            2 -> if (homeScreenState.searchQuery.isBlank()) {
                 viewModel.clearJumpToSearch()
             } else {
                 delay(400)
@@ -248,14 +242,14 @@ fun HomeScreen(
                     onClick = { homeScreenState.selectedTab = 0 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
-                    label = { Text("Google Drive") },
+                    icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    label = { Text("Go to Folder") },
                     selected = homeScreenState.selectedTab == 1,
                     onClick = { homeScreenState.selectedTab = 1 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    label = { Text("Go to Folder") },
+                    icon = { Icon(Icons.Default.Download, contentDescription = null) },
+                    label = { Text("Downloaded") },
                     selected = homeScreenState.selectedTab == 2,
                     onClick = { homeScreenState.selectedTab = 2 }
                 )
@@ -288,30 +282,7 @@ fun HomeScreen(
                     onOpenComic = onOpenComic,
                     onRequestPermission = onRequestPermission
                 )
-                1 -> DriveContent(
-                    state = state,
-                    entries = state.driveEntries,
-                    searchResults = state.driveSearchResults,
-                    isSearchingTree = state.isSearchingDriveTree,
-                    searchError = state.driveSearchError,
-                    onRetrySearch = { viewModel.searchDriveTree(homeScreenState.searchQuery) },
-                    onNavigateFolder = { id, name -> viewModel.navigateDriveFolder(id, name) },
-                    onNavigateUp = { index -> viewModel.navigateDriveUp(index) },
-                    onNavigateToBreadcrumbs = { breadcrumbs -> viewModel.navigateDriveToBreadcrumbs(breadcrumbs) },
-                    onRetry = { viewModel.retryDriveFolder() },
-                    onOpenComic = onOpenComic,
-                    onConnectDrive = onConnectDrive,
-                    onDisconnectDrive = onDisconnectDrive,
-                    onSwitchDriveAccount = onSwitchDriveAccount,
-                    onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
-                    onDeleteComicCache = { comic -> viewModel.deleteDriveComicCache(comic) },
-                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) },
-                    onClearCache = { viewModel.clearDriveCache() },
-                    onSetFavorite = { folderId, isFavorite, customName -> viewModel.setFolderFavorite(folderId, isFavorite, customName) },
-                    onRemoveSavedLink = { folderId -> viewModel.removeSavedDriveLink(folderId) },
-                    onOpenSavedFolder = { folderId, name -> viewModel.navigateDriveToBreadcrumbs(listOf(DriveBreadcrumb(folderId, name))) }
-                )
-                2 -> JumpToFolderContent(
+                1 -> JumpToFolderContent(
                     state = state,
                     input = driveUrlInput,
                     onInputChange = { driveUrlInput = it },
@@ -338,12 +309,19 @@ fun HomeScreen(
                         driveUrlInput = ""
                         viewModel.clearJumpToFolder()
                     },
+                    onNavigateToMyDrive = {
+                        driveUrlInput = "root"
+                        viewModel.navigateToLinkedFolderInJumpTab("root", "My Drive")
+                    },
                     onDownloadComic = { comic -> viewModel.downloadDriveComic(comic) },
                     onDeleteComicCache = { comic -> viewModel.deleteDriveComicCache(comic) },
-                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) },
-                    onShowDownloadedFiles = { viewModel.showDownloadedFiles() },
-                    onHideDownloadedFiles = { viewModel.hideDownloadedFiles() },
-                    onDeleteDownloadedComic = { comic -> viewModel.deleteDownloadedComic(comic) }
+                    onDownloadFolder = { folderId, folderName -> viewModel.downloadDriveFolder(folderId, folderName) }
+                )
+                2 -> DownloadedTabContent(
+                    state = state,
+                    onLoad = { viewModel.showDownloadedFiles() },
+                    onOpenComic = onOpenComic,
+                    onDelete = { comic -> viewModel.deleteDownloadedComic(comic) }
                 )
                 3 -> LocalFilesContent(
                     state = state,
@@ -362,12 +340,28 @@ fun HomeScreen(
     }
 
     if (showAboutDialog) {
-        AboutDialog(onDismiss = { showAboutDialog = false })
+        AboutDialog(
+            onDismiss = { showAboutDialog = false },
+            isDriveConnected = state.isDriveConnected,
+            accountEmail = state.driveAccountEmail,
+            onConnectDrive = onConnectDrive,
+            onDisconnectDrive = onDisconnectDrive,
+            onSwitchDriveAccount = onSwitchDriveAccount,
+            onClearCache = { viewModel.clearDriveCache() }
+        )
     }
 }
 
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+private fun AboutDialog(
+    onDismiss: () -> Unit,
+    isDriveConnected: Boolean,
+    accountEmail: String?,
+    onConnectDrive: () -> Unit,
+    onDisconnectDrive: () -> Unit,
+    onSwitchDriveAccount: () -> Unit,
+    onClearCache: () -> Unit
+) {
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -404,6 +398,39 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     color = Color.DarkGray,
                     fontSize = 12.sp
                 )
+                Spacer(modifier = Modifier.height(20.dp))
+                HorizontalDivider(color = Color.DarkGray)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Google Drive",
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                if (isDriveConnected) {
+                    Text(
+                        text = "Connected" + (accountEmail?.let { " as $it" } ?: ""),
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = onSwitchDriveAccount) { Text("Switch") }
+                        TextButton(onClick = onClearCache) { Text("Clear cache") }
+                        TextButton(onClick = onDisconnectDrive) { Text("Disconnect") }
+                    }
+                } else {
+                    Text(
+                        text = "Not connected",
+                        color = Color.White,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onConnectDrive) {
+                        Text("Connect")
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 TextButton(onClick = onDismiss) {
                     Text("Close")
@@ -706,202 +733,6 @@ fun FormatFilterRow(
                 contentDescription = if (isGridLayout) "Switch to list view" else "Switch to grid view",
                 tint = MaterialTheme.colorScheme.primary
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DriveContent(
-    state: ReaderUiState,
-    entries: List<DriveEntry>,
-    searchResults: List<DriveSearchHit>?,
-    isSearchingTree: Boolean,
-    searchError: String?,
-    onRetrySearch: () -> Unit,
-    onNavigateFolder: (String, String) -> Unit,
-    onNavigateUp: (Int) -> Unit,
-    onNavigateToBreadcrumbs: (List<DriveBreadcrumb>) -> Unit,
-    onRetry: () -> Unit,
-    onOpenComic: (ComicItem) -> Unit,
-    onConnectDrive: () -> Unit,
-    onDisconnectDrive: () -> Unit,
-    onSwitchDriveAccount: () -> Unit,
-    onDownloadComic: (ComicItem) -> Unit,
-    onDeleteComicCache: (ComicItem) -> Unit,
-    onDownloadFolder: (String, String) -> Unit,
-    onClearCache: () -> Unit,
-    onSetFavorite: (String, Boolean, String?) -> Unit,
-    onRemoveSavedLink: (String) -> Unit,
-    // Jumps straight to a favorited/recent folder from within the Google Drive tab -- replaces
-    // driveBreadcrumbs with a single entry for it (same "treat it as a fresh landing spot, don't
-    // reconstruct the real parent chain" tradeoff navigateToLinkedFolderInJumpTab already makes
-    // for the Jump to Folder tab).
-    onOpenSavedFolder: (String, String) -> Unit
-) {
-    var favoriteDialogTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var showFavoritesSheet by remember { mutableStateOf(false) }
-    var showOverflowMenu by remember { mutableStateOf(false) }
-
-    LaunchedEffect(state.driveConnectionVersion) {
-        if (state.isDriveConnected && state.driveBreadcrumbs.isEmpty()) {
-            onNavigateFolder("root", "My Drive")
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (state.isDriveConnected) {
-                Text(
-                    text = "Connected" + (state.driveAccountEmail?.let { " as $it" } ?: ""),
-                    color = Color.Gray,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { showFavoritesSheet = true }) {
-                    Icon(Icons.Default.Star, contentDescription = "View Favorites", tint = MaterialTheme.colorScheme.secondary)
-                }
-                Box {
-                    IconButton(onClick = { showOverflowMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "More Drive actions", tint = MaterialTheme.colorScheme.secondary)
-                    }
-                    DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Clear cache") },
-                            onClick = { showOverflowMenu = false; onClearCache() }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Switch Account") },
-                            onClick = { showOverflowMenu = false; onSwitchDriveAccount() }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Disconnect") },
-                            onClick = { showOverflowMenu = false; onDisconnectDrive() }
-                        )
-                    }
-                }
-            } else {
-                Text(
-                    text = "Connect your Google Drive to browse it.",
-                    color = Color.Gray,
-                    fontSize = 12.sp,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = onConnectDrive) {
-                    Text("Connect")
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (state.isDriveConnected) {
-            DriveFolderBrowser(
-                breadcrumbs = state.driveBreadcrumbs,
-                entries = entries,
-                error = state.driveError,
-                isLoading = state.isLoadingDrive,
-                searchResults = searchResults,
-                isSearchingTree = isSearchingTree,
-                searchError = searchError,
-                emptyBreadcrumbsPrompt = "Loading My Drive...",
-                onNavigateFolder = onNavigateFolder,
-                onNavigateUp = onNavigateUp,
-                onNavigateToBreadcrumbs = onNavigateToBreadcrumbs,
-                onRetry = onRetry,
-                onRetrySearch = onRetrySearch,
-                onOpenComic = onOpenComic,
-                downloadingIds = state.driveDownloadingIds,
-                cachedIds = state.driveCachedIds,
-                downloadingFolderIds = state.driveDownloadingFolderIds,
-                onDownloadComic = onDownloadComic,
-                onDeleteComicCache = onDeleteComicCache,
-                onDownloadFolder = onDownloadFolder,
-                favoriteFolderIds = state.savedDriveLinks.filter { it.isFavorite }.map { it.folderId }.toSet(),
-                onToggleFolderFavorite = { folder, isFavorite ->
-                    onSetFavorite(folder.id, !isFavorite, folder.name)
-                }
-            )
-        } else {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "Connect your Google Drive above to browse your files.",
-                    color = Color.Gray,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
-
-    val dialogTarget = favoriteDialogTarget
-    if (dialogTarget != null) {
-        val (dialogFolderId, initialName) = dialogTarget
-        var nameInput by remember(dialogFolderId) { mutableStateOf(initialName) }
-        AlertDialog(
-            onDismissRequest = { favoriteDialogTarget = null },
-            title = { Text("Rename Favorite") },
-            text = {
-                OutlinedTextField(
-                    value = nameInput,
-                    onValueChange = { nameInput = it },
-                    label = { Text("Name (optional)") },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onSetFavorite(dialogFolderId, true, nameInput.trim().ifEmpty { null })
-                    favoriteDialogTarget = null
-                }) {
-                    Text("Save")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { favoriteDialogTarget = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    if (showFavoritesSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showFavoritesSheet = false },
-            containerColor = Color(0xFF1E1E1E)
-        ) {
-            Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp)) {
-                Text("Favorites & Recent", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(12.dp))
-                if (state.savedDriveLinks.isEmpty()) {
-                    Text("No saved folders yet.", color = Color.Gray, fontSize = 13.sp)
-                } else {
-                    SavedDriveLinksList(
-                        links = state.savedDriveLinks,
-                        onOpen = { folderId ->
-                            showFavoritesSheet = false
-                            val name = state.savedDriveLinks.find { it.folderId == folderId }?.customName ?: folderId
-                            onOpenSavedFolder(folderId, name)
-                        },
-                        onRemove = onRemoveSavedLink,
-                        onEdit = { link ->
-                            showFavoritesSheet = false
-                            favoriteDialogTarget = link.folderId to (link.customName ?: "")
-                        },
-                        downloadingFolderIds = state.driveDownloadingFolderIds,
-                        onDownloadFolder = onDownloadFolder
-                    )
-                }
-            }
         }
     }
 }
@@ -1319,10 +1150,11 @@ private fun DriveFolderBrowser(
 }
 
 /**
- * The Go to Folder tab's "Downloaded" management view -- every file actually on disk right now
- * (see [ReaderViewModel.showDownloadedFiles]), grouped by the folder it came from, regardless of
- * which folder is currently favorited/browsed. Lets a user find and delete a downloaded file
- * without having to remember or re-navigate to whichever folder it originally came from.
+ * The "Downloaded" tab's content -- every file actually on disk right now (see
+ * [ReaderViewModel.showDownloadedFiles]), across every Drive folder, refreshed fresh every time
+ * this tab is selected ([onLoad] runs once per composition, and Compose disposes/recreates this
+ * composable each time the tab bar switches away from and back to it -- a deliberate "check what
+ * I have" scan, not something kept continuously live).
  *
  * Two-level navigation, mirroring how a real folder browses: first a list of folders that have
  * at least one downloaded file, then drilling into one shows just its files. [selectedFolder] is
@@ -1330,89 +1162,96 @@ private fun DriveFolderBrowser(
  * that's already fully loaded -- picking a folder never needs a new fetch.
  */
 @Composable
-private fun DownloadedFilesView(
-    comics: List<ComicItem>,
-    isLoading: Boolean,
-    onHome: () -> Unit,
+fun DownloadedTabContent(
+    state: ReaderUiState,
+    onLoad: () -> Unit,
     onOpenComic: (ComicItem) -> Unit,
     onDelete: (ComicItem) -> Unit
 ) {
+    LaunchedEffect(Unit) { onLoad() }
+
     var selectedFolder by remember { mutableStateOf<String?>(null) }
-    val grouped = remember(comics) { comics.groupBy { it.folderName ?: "Unsorted" }.toSortedMap() }
+    val grouped = remember(state.downloadedComics) { state.downloadedComics.groupBy { it.folderName ?: "Unsorted" }.toSortedMap() }
 
     // If the folder currently drilled into loses its last file (the user just deleted it), bounce
-    // back to the folder list instead of leaving an empty screen with no way out but Home.
+    // back to the folder list instead of leaving an empty screen with no way out.
     LaunchedEffect(grouped, selectedFolder) {
         if (selectedFolder != null && grouped[selectedFolder].isNullOrEmpty()) {
             selectedFolder = null
         }
     }
 
-    BackHandler {
-        if (selectedFolder != null) selectedFolder = null else onHome()
+    BackHandler(enabled = selectedFolder != null) {
+        selectedFolder = null
     }
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        IconButton(
-            onClick = { if (selectedFolder != null) selectedFolder = null else onHome() },
-            modifier = Modifier.size(32.dp)
-        ) {
-            Icon(Icons.Default.Home, contentDescription = "Back to Favorites", tint = MaterialTheme.colorScheme.primary)
-        }
-        Spacer(modifier = Modifier.width(4.dp))
-        val currentFolder = selectedFolder
-        Row(
-            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Downloaded",
-                color = if (currentFolder == null) MaterialTheme.colorScheme.primary else Color.Gray,
-                fontSize = 13.sp,
-                modifier = Modifier.clickable { selectedFolder = null }
-            )
-            if (currentFolder != null) {
-                Text(" > ", color = Color.Gray, fontSize = 13.sp)
-                Text(currentFolder, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
-            }
-        }
-    }
-    Spacer(modifier = Modifier.height(16.dp))
 
-    when {
-        isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        }
-        comics.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyStateMessage(icon = Icons.Default.Download, text = "No files downloaded yet.")
-        }
-        selectedFolder == null -> {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(grouped.keys.toList()) { folderName ->
-                    val count = grouped[folderName]?.size ?: 0
-                    ListItem(
-                        headlineContent = { Text(folderName, color = Color.White, fontWeight = FontWeight.Bold) },
-                        supportingContent = { Text(if (count == 1) "1 file" else "$count files", color = Color.Gray, fontSize = 12.sp) },
-                        leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                        trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { selectedFolder = folderName }
-                            .background(MaterialTheme.colorScheme.surface)
-                    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            if (selectedFolder != null) {
+                IconButton(onClick = { selectedFolder = null }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Up one folder", tint = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Downloaded",
+                    color = if (selectedFolder == null) MaterialTheme.colorScheme.primary else Color.Gray,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.clickable { selectedFolder = null }
+                )
+                if (selectedFolder != null) {
+                    Text(" > ", color = Color.Gray, fontSize = 13.sp)
+                    Text(selectedFolder!!, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
                 }
             }
         }
-        else -> {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(grouped[selectedFolder].orEmpty()) { comic ->
-                    DriveComicFileRow(
-                        comic = comic,
-                        isDownloading = false,
-                        isCached = true,
-                        onDownload = {},
-                        onDelete = { onDelete(comic) },
-                        onOpen = { onOpenComic(comic) }
-                    )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        when {
+            state.isLoadingDownloadedFiles -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+            state.downloadedComics.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyStateMessage(icon = Icons.Default.Download, text = "No files downloaded yet.")
+            }
+            selectedFolder == null -> {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(grouped.keys.toList()) { folderName ->
+                        val count = grouped[folderName]?.size ?: 0
+                        ListItem(
+                            headlineContent = { Text(folderName, color = Color.White, fontWeight = FontWeight.Bold) },
+                            supportingContent = { Text(if (count == 1) "1 file" else "$count files", color = Color.Gray, fontSize = 12.sp) },
+                            leadingContent = { Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                            trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { selectedFolder = folderName }
+                                .background(MaterialTheme.colorScheme.surface)
+                        )
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(grouped[selectedFolder].orEmpty()) { comic ->
+                        DriveComicFileRow(
+                            comic = comic,
+                            isDownloading = false,
+                            isCached = true,
+                            onDownload = {},
+                            onDelete = { onDelete(comic) },
+                            onOpen = { onOpenComic(comic) }
+                        )
+                    }
                 }
             }
         }
@@ -1444,9 +1283,7 @@ fun JumpToFolderContent(
     onDownloadComic: (ComicItem) -> Unit,
     onDeleteComicCache: (ComicItem) -> Unit,
     onDownloadFolder: (String, String) -> Unit,
-    onShowDownloadedFiles: () -> Unit,
-    onHideDownloadedFiles: () -> Unit,
-    onDeleteDownloadedComic: (ComicItem) -> Unit
+    onNavigateToMyDrive: () -> Unit
 ) {
     // folderId to the name pre-filled into the dialog -- "" for a brand new favorite, or the
     // existing custom name when reopened via a saved entry's rename (pencil) icon.
@@ -1473,14 +1310,6 @@ fun JumpToFolderContent(
                     }
                 }
             }
-        } else if (state.isViewingDownloadedFiles) {
-            DownloadedFilesView(
-                comics = state.downloadedComics,
-                isLoading = state.isLoadingDownloadedFiles,
-                onHome = onHideDownloadedFiles,
-                onOpenComic = onOpenComic,
-                onDelete = onDeleteDownloadedComic
-            )
         } else {
             // The paste-a-link row only makes sense before you've drilled into a folder -- once a
             // specific folder is open, DriveFolderBrowser's own breadcrumb row (Home icon + folder
@@ -1514,27 +1343,28 @@ fun JumpToFolderContent(
                     }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
-                // A top-level entry point to every downloaded file across every folder -- separate
-                // from browsing any one folder's own Downloaded/Files split, this is for managing
-                // (viewing, deleting) the whole set at once without hunting through each folder.
+                // Pins root-level Drive browsing (no pasted link needed) one tap away -- the only
+                // way in used to be the now-removed Google Drive tab, permanently anchored here.
+                // Reuses this same jump-to-folder session (navigateToLinkedFolderInJumpTab is the
+                // exact mechanism a pasted link or a favorited/recent folder already goes through).
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { onShowDownloadedFiles() }
+                        .clickable { onNavigateToMyDrive() }
                         .background(MaterialTheme.colorScheme.surface)
                         .padding(12.dp)
                 ) {
-                    Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.CloudDownload, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("Downloaded", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("My Drive", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                 }
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            if (state.jumpToBreadcrumbs.isEmpty() && state.savedDriveLinks.isNotEmpty()) {
+            if (state.jumpToBreadcrumbs.isEmpty() && state.savedDriveLinks.any { it.isFavorite }) {
                 SavedDriveLinksList(
                     links = state.savedDriveLinks,
                     onOpen = onOpenSavedLink,
@@ -1614,10 +1444,10 @@ fun JumpToFolderContent(
             containerColor = Color(0xFF1E1E1E)
         ) {
             Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp)) {
-                Text("Favorites & Recent", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
+                Text("Favorites", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
                 Spacer(modifier = Modifier.height(12.dp))
-                if (state.savedDriveLinks.isEmpty()) {
-                    Text("No saved folders yet.", color = Color.Gray, fontSize = 13.sp)
+                if (state.savedDriveLinks.none { it.isFavorite }) {
+                    Text("No favorites yet.", color = Color.Gray, fontSize = 13.sp)
                 } else {
                     SavedDriveLinksList(
                         links = state.savedDriveLinks,
@@ -1631,7 +1461,8 @@ fun JumpToFolderContent(
                             favoriteDialogTarget = link.folderId to (link.customName ?: "")
                         },
                         downloadingFolderIds = state.driveDownloadingFolderIds,
-                        onDownloadFolder = onDownloadFolder
+                        onDownloadFolder = onDownloadFolder,
+                        showHeader = false
                     )
                 }
             }
@@ -1646,27 +1477,19 @@ private fun SavedDriveLinksList(
     onRemove: (String) -> Unit,
     onEdit: (SavedDriveLink) -> Unit,
     downloadingFolderIds: Set<String>,
-    onDownloadFolder: (String, String) -> Unit
+    onDownloadFolder: (String, String) -> Unit,
+    showHeader: Boolean = true
 ) {
     val favorites = links.filter { it.isFavorite }.sortedBy { (it.customName ?: it.folderId).lowercase() }
-    val recents = links.filter { !it.isFavorite }.sortedByDescending { it.lastUsedTimestamp }
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (favorites.isNotEmpty()) {
+        if (showHeader) {
             item {
                 Text("Favorites", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
             }
-            items(favorites) { link ->
-                SavedDriveLinkRow(link, onOpen, onRemove, onEdit, downloadingFolderIds, onDownloadFolder)
-            }
         }
-        if (recents.isNotEmpty()) {
-            item {
-                Text("Recent", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-            }
-            items(recents) { link ->
-                SavedDriveLinkRow(link, onOpen, onRemove, onEdit, downloadingFolderIds, onDownloadFolder)
-            }
+        items(favorites) { link ->
+            SavedDriveLinkRow(link, onOpen, onRemove, onEdit, downloadingFolderIds, onDownloadFolder)
         }
     }
 }
@@ -1684,28 +1507,19 @@ private fun SavedDriveLinkRow(
         headlineContent = { Text(link.customName ?: link.folderId, color = Color.White, fontWeight = FontWeight.Bold) },
         leadingContent = {
             Icon(
-                imageVector = if (link.isFavorite) Icons.Default.Star else Icons.Default.History,
+                imageVector = Icons.Default.Star,
                 contentDescription = null,
-                tint = if (link.isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                tint = MaterialTheme.colorScheme.secondary
             )
         },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (link.isFavorite) {
-                    DriveFolderDownloadAction(
-                        isDownloading = link.folderId in downloadingFolderIds,
-                        onDownload = { onDownloadFolder(link.folderId, link.customName ?: link.folderId) }
-                    )
-                    IconButton(onClick = { onEdit(link) }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Rename", tint = Color.Gray)
-                    }
-                } else {
-                    // Reuses the same rename dialog as an existing favorite -- since this link isn't
-                    // favorited yet, the dialog's own isRename check makes it show "Add to Favorites"
-                    // instead, which is exactly what promoting a Recent entry needs.
-                    IconButton(onClick = { onEdit(link) }) {
-                        Icon(Icons.Default.StarBorder, contentDescription = "Add to Favorites", tint = Color.Gray)
-                    }
+                DriveFolderDownloadAction(
+                    isDownloading = link.folderId in downloadingFolderIds,
+                    onDownload = { onDownloadFolder(link.folderId, link.customName ?: link.folderId) }
+                )
+                IconButton(onClick = { onEdit(link) }) {
+                    Icon(Icons.Default.Edit, contentDescription = "Rename", tint = Color.Gray)
                 }
                 IconButton(onClick = { onRemove(link.folderId) }) {
                     Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Gray)

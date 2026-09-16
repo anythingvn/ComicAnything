@@ -6,7 +6,6 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -36,32 +35,6 @@ class SavedDriveLinkRepositoryTest {
     }
 
     @Test
-    fun `recordUsed adds a new non-favorite entry`() = runTest {
-        val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
-
-        repo.recordUsed("folder-1")
-        val result = repo.getAll()
-
-        assertEquals(1, result.size)
-        assertEquals("folder-1", result[0].folderId)
-        assertEquals(false, result[0].isFavorite)
-        assertNull(result[0].customName)
-    }
-
-    @Test
-    fun `recordUsed on an existing entry bumps its timestamp without touching favorite or name`() = runTest {
-        val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
-        repo.setFavorite("folder-1", isFavorite = true, customName = "My Comics")
-
-        repo.recordUsed("folder-1")
-        val result = repo.getAll()
-
-        assertEquals(1, result.size)
-        assertEquals(true, result[0].isFavorite)
-        assertEquals("My Comics", result[0].customName)
-    }
-
-    @Test
     fun `setFavorite creates the entry if it doesn't exist yet`() = runTest {
         val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
 
@@ -78,39 +51,35 @@ class SavedDriveLinkRepositoryTest {
         val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
         repo.setFavorite("folder-1", isFavorite = true, customName = "Original Name")
 
-        repo.setFavorite("folder-1", isFavorite = false, customName = null)
+        repo.setFavorite("folder-1", isFavorite = true, customName = null)
         val result = repo.getAll()
 
         assertEquals("Original Name", result[0].customName)
-        assertEquals(false, result[0].isFavorite)
+        assertEquals(true, result[0].isFavorite)
+    }
+
+    @Test
+    fun `setFavorite false removes the entry from storage entirely`() = runTest {
+        val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
+        repo.setFavorite("folder-1", isFavorite = true, customName = "My Comics")
+
+        repo.setFavorite("folder-1", isFavorite = false, customName = null)
+        val result = repo.getAll()
+
+        assertTrue(result.isEmpty())
     }
 
     @Test
     fun `remove deletes the entry`() = runTest {
         val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
-        repo.recordUsed("folder-1")
-        repo.recordUsed("folder-2")
+        repo.setFavorite("folder-1", isFavorite = true, customName = null)
+        repo.setFavorite("folder-2", isFavorite = true, customName = null)
 
         repo.remove("folder-1")
         val result = repo.getAll()
 
         assertEquals(1, result.size)
         assertEquals("folder-2", result[0].folderId)
-    }
-
-    @Test
-    fun `non-favorite recents beyond the cap are dropped, oldest first, but favorites never are`() = runTest {
-        val repo = SavedDriveLinkRepository(dataStore, ioDispatcher = Dispatchers.Unconfined)
-        repo.setFavorite("keep-forever", isFavorite = true, customName = null)
-        // MAX_RECENTS is 20 -- add 25 more non-favorite entries so 5 of the oldest must be dropped.
-        repeat(25) { i -> repo.recordUsed("recent-$i") }
-
-        val result = repo.getAll()
-
-        assertTrue(result.any { it.folderId == "keep-forever" })
-        assertEquals(21, result.size) // 1 favorite + 20 most recent
-        assertTrue(result.none { it.folderId == "recent-0" }) // the oldest of the 25 was dropped
-        assertTrue(result.any { it.folderId == "recent-24" }) // the newest survived
     }
 
     @Test

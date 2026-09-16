@@ -60,22 +60,12 @@ data class LocalBreadcrumb(val path: String, val name: String)
 
 data class ReaderUiState(
     val libraryComics: List<ComicItem> = emptyList(),
-    val driveEntries: List<DriveEntry> = emptyList(),
-    val driveBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
-    val driveError: String? = null,
-    // null = no recursive search active for this folder (show driveEntries normally); non-null
-    // (possibly empty) = a search is active and this is its result set, searched from the
-    // current folder down through its subfolders.
-    val driveSearchResults: List<DriveSearchHit>? = null,
-    val isSearchingDriveTree: Boolean = false,
-    // Set when the search itself couldn't run (e.g. an expired token, no connection) rather than
-    // when it ran fine and simply found nothing -- those two cases must stay visibly different,
-    // since silently reporting a failed search as "no matches" reads as the feature being broken.
-    val driveSearchError: String? = null,
-    // A second, independent Drive browsing session for the "Jump to Folder" tab -- deliberately
-    // separate from driveBreadcrumbs/driveEntries above rather than sharing them, since jumping to
-    // a pasted folder there must not disturb wherever the user was browsing in the main Google
-    // Drive tab (and vice versa). Mirrors the drive* fields' shape and meaning field-for-field.
+    // The Go to Folder tab's Drive browsing session -- covers a pasted link/ID, a favorited or
+    // recent folder, AND the pinned "My Drive" entry (navigated to via
+    // navigateToLinkedFolderInJumpTab("root", "My Drive")). This used to be one of TWO parallel
+    // sessions (this one, plus a separate drive*-prefixed session dedicated to a now-removed
+    // Google Drive tab permanently anchored at My Drive) -- with only one Drive-browsing surface
+    // left in the app, that duplication no longer earns its keep.
     val jumpToBreadcrumbs: List<DriveBreadcrumb> = emptyList(),
     val jumpToEntries: List<DriveEntry> = emptyList(),
     val jumpToError: String? = null,
@@ -83,10 +73,9 @@ data class ReaderUiState(
     val jumpToSearchResults: List<DriveSearchHit>? = null,
     val isSearchingJumpToTree: Boolean = false,
     val jumpToSearchError: String? = null,
-    // Folders jumped to from the Jump to Folder tab, favorited or just recently used -- see
-    // SavedDriveLinkRepository's doc comment. Independent of jumpToBreadcrumbs/jumpToEntries
-    // (which track wherever the user currently is), this is the persisted list shown before any
-    // link has been pasted yet.
+    // The user's favorited Drive folders -- see SavedDriveLinkRepository's doc comment.
+    // Independent of jumpToBreadcrumbs/jumpToEntries (which track wherever the user currently
+    // is), this is the persisted list shown before any link has been pasted yet.
     val savedDriveLinks: List<SavedDriveLink> = emptyList(),
     val localEntries: List<LocalEntry> = emptyList(),
     val localBreadcrumbs: List<LocalBreadcrumb> = emptyList(),
@@ -105,7 +94,6 @@ data class ReaderUiState(
     // same way they do.
     val isGridLayout: Boolean = true,
     val isControlsVisible: Boolean = true,
-    val isLoadingDrive: Boolean = false,
     val hasStoragePermission: Boolean = false,
     val isScanningLocal: Boolean = false,
     val currentPageBitmap: Bitmap? = null,
@@ -114,12 +102,6 @@ data class ReaderUiState(
     val pageSourceGeneration: Int = 0,
     val isDriveConnected: Boolean = false,
     val driveAccountEmail: String? = null,
-    // Increments on every successful (re-)authorization, including switching to the SAME
-    // account. DriveContent's auto-navigate-to-root LaunchedEffect keys on this instead of
-    // isDriveConnected -- that boolean doesn't change value when switching accounts while
-    // already connected, so it would never re-fire and the UI would get stuck showing cleared
-    // (empty) breadcrumbs/entries with no re-fetch.
-    val driveConnectionVersion: Int = 0,
     val epubBook: EpubBook? = null,
     // Drive file ids currently mid-download (either a single-file "download for offline reading"
     // tap, or one being processed as part of a folder batch) -- drives the spinner shown in place
@@ -140,7 +122,6 @@ data class ReaderUiState(
     // (see showDownloadedFiles) rather than kept live, since it's a deliberate "check what I have"
     // action rather than something the rest of the UI needs to react to continuously.
     val downloadedComics: List<ComicItem> = emptyList(),
-    val isViewingDownloadedFiles: Boolean = false,
     val isLoadingDownloadedFiles: Boolean = false
 )
 
@@ -286,7 +267,6 @@ class ReaderViewModel @JvmOverloads constructor(
     private var pageCache: PageBitmapCache? = null
     private var debounceJob: Job? = null
     private var epubExtractedDir: File? = null
-    private var driveSearchJob: Job? = null
     private var localSearchJob: Job? = null
     private var jumpToSearchJob: Job? = null
 
@@ -371,24 +351,6 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    fun navigateDriveFolder(folderId: String, name: String) {
-        _uiState.value = _uiState.value.copy(
-            driveBreadcrumbs = _uiState.value.driveBreadcrumbs + DriveBreadcrumb(folderId, name)
-        )
-        fetchCurrentDriveFolder()
-    }
-
-    fun navigateDriveUp(toIndex: Int) {
-        val breadcrumbs = _uiState.value.driveBreadcrumbs
-        if (toIndex !in breadcrumbs.indices) return
-        _uiState.value = _uiState.value.copy(driveBreadcrumbs = breadcrumbs.take(toIndex + 1))
-        fetchCurrentDriveFolder()
-    }
-
-    fun retryDriveFolder() {
-        fetchCurrentDriveFolder()
-    }
-
     /**
      * Stamps [folderName] onto every comic file in this listing -- DriveEntry.ComicFile's own
      * comic has no idea what folder it was just listed in (GoogleDriveRepository only knows the
@@ -409,7 +371,7 @@ class ReaderViewModel @JvmOverloads constructor(
      *
      * Best-effort: this is a nice-to-have reconciliation, not core to displaying the folder, so
      * any failure (e.g. storage briefly unavailable) is swallowed here rather than surfacing as a
-     * driveError/jumpToError that would hide the folder listing this call is layered on top of.
+     * jumpToError that would hide the folder listing this call is layered on top of.
      */
     private suspend fun refreshCachedStatus(entries: List<DriveEntry>) {
         val comics = entries.filterIsInstance<DriveEntry.ComicFile>().map { it.comic }
@@ -422,38 +384,6 @@ class ReaderViewModel @JvmOverloads constructor(
             throw e
         } catch (e: Exception) {
             // See doc comment above -- deliberately not surfaced.
-        }
-    }
-
-    private fun fetchCurrentDriveFolder() {
-        val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingDrive = true, driveError = null)
-            val token = driveAccessToken()
-            if (token == null) {
-                _uiState.value = _uiState.value.copy(
-                    isLoadingDrive = false,
-                    driveError = "Connect your Google Drive to browse it"
-                )
-                return@launch
-            }
-            try {
-                val entries = fetchDriveFolderContents(current.folderId, token).stampFolderName(current.name)
-                refreshCachedStatus(entries)
-                _uiState.value = _uiState.value.copy(driveEntries = entries, isLoadingDrive = false)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // Widened from `catch (e: DriveApiException)` as defense in depth, matching the
-                // pattern already used in openComic/openEpubComic: GoogleDriveRepository's own
-                // exception coverage was widened too (see its fetchFolderContents), but this is
-                // the layer that actually prevents an uncaught exception inside
-                // viewModelScope.launch from crashing the app if anything still slips through.
-                _uiState.value = _uiState.value.copy(
-                    isLoadingDrive = false,
-                    driveError = e.message ?: "Couldn't load this folder"
-                )
-            }
         }
     }
 
@@ -478,13 +408,14 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Opens the Go to Folder tab's "Downloaded" management view and (re-)scans disk for what's
-     * actually there right now, across every folder -- a deliberate point-in-time check rather
-     * than something kept continuously live, so downloading/deleting elsewhere in the app while
-     * this view is open won't retroactively update it until it's reopened.
+     * (Re-)scans disk for every downloaded file across every folder, backing the Downloaded tab --
+     * a deliberate point-in-time check rather than something kept continuously live, called fresh
+     * every time that tab is selected (see DownloadedTabContent's LaunchedEffect) so
+     * downloading/deleting elsewhere in the app while some other tab is showing won't retroactively
+     * update it until the Downloaded tab is revisited.
      */
     fun showDownloadedFiles() {
-        _uiState.value = _uiState.value.copy(isViewingDownloadedFiles = true, isLoadingDownloadedFiles = true)
+        _uiState.value = _uiState.value.copy(isLoadingDownloadedFiles = true)
         viewModelScope.launch {
             val comics = withContext(ioDispatcher) {
                 driveDownloadStore().listAll().map { downloaded ->
@@ -508,11 +439,6 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
-    /** Returns the Go to Folder tab from the "Downloaded" management view back to the Favorites/Recent list. */
-    fun hideDownloadedFiles() {
-        _uiState.value = _uiState.value.copy(isViewingDownloadedFiles = false)
-    }
-
     /** Deletes [comic]'s file from disk and removes it from the currently-open Downloaded view's own list. */
     fun deleteDownloadedComic(comic: ComicItem) {
         driveDownloadCoordinator.deleteCache(comic)
@@ -526,62 +452,8 @@ class ReaderViewModel @JvmOverloads constructor(
         else -> ComicFormat.PDF
     }
 
-    /**
-     * Recursively searches the CURRENT Drive folder and everything beneath it for a folder or
-     * file name containing [query], replacing [ReaderUiState.driveSearchResults]. Superseding a
-     * still-in-flight search (the user kept typing) cancels the old one -- callers are expected
-     * to debounce keystrokes themselves before calling this, since a live Drive API call per
-     * keystroke would be wasteful and slow.
-     */
-    fun searchDriveTree(query: String) {
-        driveSearchJob?.cancel()
-        val trimmed = query.trim()
-        if (trimmed.isEmpty()) {
-            _uiState.value = _uiState.value.copy(driveSearchResults = null, driveSearchError = null, isSearchingDriveTree = false)
-            return
-        }
-        val current = _uiState.value.driveBreadcrumbs.lastOrNull() ?: return
-        driveSearchJob = viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSearchingDriveTree = true, driveSearchError = null)
-            val token = driveAccessToken()
-            if (token == null) {
-                _uiState.value = _uiState.value.copy(
-                    isSearchingDriveTree = false,
-                    driveSearchResults = null,
-                    driveSearchError = "Not connected to Google Drive"
-                )
-                return@launch
-            }
-            try {
-                val results = searchDriveFolderTree(current.folderId, trimmed, token)
-                _uiState.value = _uiState.value.copy(driveSearchResults = results, isSearchingDriveTree = false)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isSearchingDriveTree = false,
-                    driveSearchResults = null,
-                    driveSearchError = e.message ?: "Search failed -- try again"
-                )
-            }
-        }
-    }
-
-    fun clearDriveSearch() {
-        driveSearchJob?.cancel()
-        _uiState.value = _uiState.value.copy(driveSearchResults = null, driveSearchError = null, isSearchingDriveTree = false)
-    }
-
-    /** Jumps straight to a folder found via [searchDriveTree], replacing the breadcrumb trail. */
-    fun navigateDriveToBreadcrumbs(breadcrumbs: List<DriveBreadcrumb>) {
-        clearDriveSearch()
-        _uiState.value = _uiState.value.copy(driveBreadcrumbs = breadcrumbs)
-        fetchCurrentDriveFolder()
-    }
-
-    // -- "Jump to Folder" tab: a second, independent Drive browsing session (see
-    // ReaderUiState.jumpToBreadcrumbs' doc comment). Each function below mirrors its drive*
-    // counterpart above field-for-field, operating on the jumpTo* state instead.
+    // -- "Jump to Folder" tab: the app's one Drive browsing session (see
+    // ReaderUiState.jumpToBreadcrumbs' doc comment).
 
     /**
      * Starts a fresh browsing session at the pasted folder, discarding whatever breadcrumb trail
@@ -593,18 +465,6 @@ class ReaderViewModel @JvmOverloads constructor(
         clearJumpToSearch()
         _uiState.value = _uiState.value.copy(jumpToBreadcrumbs = listOf(DriveBreadcrumb(folderId, displayName ?: folderId)))
         fetchCurrentJumpToFolder()
-        // Recorded regardless of whether the fetch above ends up succeeding -- a saved link is
-        // fundamentally "a folder the user pasted," and a transient load failure right now
-        // shouldn't erase that from their recent list. Synchronous (runBlocking) for the same
-        // reason as persistReaderSettings() -- see its comment: NonCancellable only protects
-        // against viewModelScope itself being cancelled, not against the OS killing the whole
-        // process, which real devices confirmed can happen fast enough that a background
-        // coroutine never gets to run at all.
-        runBlocking(ioDispatcher) {
-            val repo = savedDriveLinkRepo()
-            repo.recordUsed(folderId)
-            _uiState.value = _uiState.value.copy(savedDriveLinks = repo.getAll())
-        }
     }
 
     fun loadSavedDriveLinks() {
@@ -805,10 +665,10 @@ class ReaderViewModel @JvmOverloads constructor(
      * Also fixes the related cold-start race: `loadDriveConnectionState()` (a fast DataStore
      * read) and the slow Play Services silent-auth round-trip that actually produces a token run
      * concurrently on every onResume(); the fast one almost always finishes first, flipping
-     * isDriveConnected = true and triggering an auto-navigate-to-root before a real token exists
-     * yet, which previously left a stale "Connect your Google Drive to browse it" driveError on
-     * screen for an already-connected user with no automatic retry. Re-fetching here when a real
-     * token lands while that specific error is still showing closes that gap automatically.
+     * isDriveConnected = true before a real token exists yet, which previously left a stale
+     * "Connect your Google Drive to browse it" jumpToError on screen for an already-connected user
+     * with no automatic retry. Re-fetching here when a real token lands while that specific error
+     * is still showing closes that gap automatically.
      */
     fun updateDriveAccessToken(token: String?) {
         pushedDriveAccessToken.set(token)
@@ -817,8 +677,8 @@ class ReaderViewModel @JvmOverloads constructor(
         // that AtomicReference (it isn't in the same process-local object graph the Service
         // reconstructs its own coordinator from), so it needs the fresh token pushed explicitly.
         driveDownloadCoordinator.updateAccessToken(token)
-        if (token != null && _uiState.value.driveError != null && _uiState.value.driveBreadcrumbs.isNotEmpty()) {
-            fetchCurrentDriveFolder()
+        if (token != null && _uiState.value.jumpToError != null && _uiState.value.jumpToBreadcrumbs.isNotEmpty()) {
+            fetchCurrentJumpToFolder()
         }
     }
 
@@ -833,7 +693,7 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun onDriveAuthorized(accountEmail: String?) {
-        // Clearing driveEntries/driveBreadcrumbs here matters for the account-switch path
+        // Clearing jumpToEntries/jumpToBreadcrumbs here matters for the account-switch path
         // (MainActivity.switchDriveAccount()): without it, browsing state from the PREVIOUS
         // account (a folder ID deep in someone else's Drive) would stick around and get
         // re-fetched against the NEW account's token, either erroring out or leaking a stale
@@ -841,10 +701,9 @@ class ReaderViewModel @JvmOverloads constructor(
         _uiState.value = _uiState.value.copy(
             isDriveConnected = true,
             driveAccountEmail = accountEmail,
-            driveEntries = emptyList(),
-            driveBreadcrumbs = emptyList(),
-            driveError = null,
-            driveConnectionVersion = _uiState.value.driveConnectionVersion + 1
+            jumpToEntries = emptyList(),
+            jumpToBreadcrumbs = emptyList(),
+            jumpToError = null
         )
         // Synchronous -- see persistReaderSettings()'s comment: connecting Drive and then
         // immediately navigating away must not abandon the write mid-flight, and NonCancellable
@@ -878,9 +737,9 @@ class ReaderViewModel @JvmOverloads constructor(
         _uiState.value = _uiState.value.copy(
             isDriveConnected = false,
             driveAccountEmail = null,
-            driveEntries = emptyList(),
-            driveBreadcrumbs = emptyList(),
-            driveError = null
+            jumpToEntries = emptyList(),
+            jumpToBreadcrumbs = emptyList(),
+            jumpToError = null
         )
         // Synchronous -- see persistReaderSettings()'s comment.
         runBlocking(ioDispatcher) {

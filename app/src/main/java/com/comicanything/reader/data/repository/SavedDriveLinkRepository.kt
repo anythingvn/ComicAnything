@@ -20,8 +20,7 @@ import java.io.IOException
 data class SavedDriveLink(
     val folderId: String,
     val customName: String?,
-    val isFavorite: Boolean,
-    val lastUsedTimestamp: Long
+    val isFavorite: Boolean
 )
 
 private val Context.savedDriveLinksDataStore: DataStore<Preferences> by preferencesDataStore(
@@ -30,10 +29,9 @@ private val Context.savedDriveLinksDataStore: DataStore<Preferences> by preferen
 )
 
 /**
- * Persists the folders a user has jumped to from the Jump to Folder tab: every successful jump is
- * recorded as a "recent" entry (capped at [MAX_RECENTS], oldest dropped first), and any entry can
- * be starred as a favorite -- which exempts it from that cap, since favoriting is a deliberate
- * "keep this" action distinct from just having used it once.
+ * Persists the user's favorited Drive folders (starred from the Jump to Folder tab or while
+ * browsing). Only favorites are ever stored -- un-favoriting a folder drops it from storage
+ * entirely rather than demoting it to some other tracked state.
  */
 class SavedDriveLinkRepository(
     private val dataStore: DataStore<Preferences>,
@@ -53,23 +51,7 @@ class SavedDriveLinkRepository(
         }
     }
 
-    /**
-     * Records that [folderId] was just jumped to: bumps its timestamp if already saved, otherwise
-     * adds it as a new, non-favorite entry. Never touches an existing entry's favorite flag or
-     * custom name.
-     */
-    suspend fun recordUsed(folderId: String) = withContext(ioDispatcher) {
-        writeUpdated { current ->
-            val now = System.currentTimeMillis()
-            if (current.any { it.folderId == folderId }) {
-                current.map { if (it.folderId == folderId) it.copy(lastUsedTimestamp = now) else it }
-            } else {
-                current + SavedDriveLink(folderId, customName = null, isFavorite = false, lastUsedTimestamp = now)
-            }
-        }
-    }
-
-    /** Sets [folderId]'s favorite flag, creating the entry if it doesn't exist yet (e.g. favoriting a folder that was just jumped to in the same call chain). A non-null [customName] replaces any existing name; null leaves it as-is. */
+    /** Sets [folderId]'s favorite flag, creating the entry if it doesn't exist yet. A non-null [customName] replaces any existing name; null leaves it as-is. Setting [isFavorite] to false drops the entry from storage entirely -- see the class doc comment. */
     suspend fun setFavorite(folderId: String, isFavorite: Boolean, customName: String?) = withContext(ioDispatcher) {
         writeUpdated { current ->
             if (current.any { it.folderId == folderId }) {
@@ -77,7 +59,7 @@ class SavedDriveLinkRepository(
                     if (it.folderId == folderId) it.copy(isFavorite = isFavorite, customName = customName ?: it.customName) else it
                 }
             } else {
-                current + SavedDriveLink(folderId, customName, isFavorite, System.currentTimeMillis())
+                current + SavedDriveLink(folderId, customName, isFavorite)
             }
         }
     }
@@ -90,12 +72,8 @@ class SavedDriveLinkRepository(
         try {
             dataStore.edit { prefs ->
                 val current = prefs[LINKS_KEY]?.let { decode(it) } ?: emptyList()
-                val updated = transform(current)
-                val favorites = updated.filter { it.isFavorite }
-                val recents = updated.filter { !it.isFavorite }
-                    .sortedByDescending { it.lastUsedTimestamp }
-                    .take(MAX_RECENTS)
-                prefs[LINKS_KEY] = Gson().toJson(favorites + recents)
+                val updated = transform(current).filter { it.isFavorite }
+                prefs[LINKS_KEY] = Gson().toJson(updated)
             }
         } catch (e: IOException) {
             // A failed write just means that write didn't happen -- never surface a
@@ -114,6 +92,5 @@ class SavedDriveLinkRepository(
 
     companion object {
         private val LINKS_KEY = stringPreferencesKey("saved_drive_links_json")
-        private const val MAX_RECENTS = 20
     }
 }
