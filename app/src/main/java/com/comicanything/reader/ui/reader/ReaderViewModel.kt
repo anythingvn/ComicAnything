@@ -102,6 +102,10 @@ data class ReaderUiState(
     val pageSourceGeneration: Int = 0,
     val isDriveConnected: Boolean = false,
     val driveAccountEmail: String? = null,
+    // Set only by an explicit, user-initiated connect/switch-account attempt that failed (see
+    // onDriveConnectFailed's doc comment) -- never by the silent background re-check, which must
+    // stay invisible to the user. Cleared on the next successful connect.
+    val driveAuthError: String? = null,
     val epubBook: EpubBook? = null,
     // Drive file ids currently mid-download (either a single-file "download for offline reading"
     // tap, or one being processed as part of a folder batch) -- drives the spinner shown in place
@@ -701,6 +705,7 @@ class ReaderViewModel @JvmOverloads constructor(
         _uiState.value = _uiState.value.copy(
             isDriveConnected = true,
             driveAccountEmail = accountEmail,
+            driveAuthError = null,
             jumpToEntries = emptyList(),
             jumpToBreadcrumbs = emptyList(),
             jumpToError = null
@@ -713,8 +718,18 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Silent background re-check (every onResume()) downgrading a stale "connected" state -- deliberately shows nothing to the user. See checkDriveAuthorizationSilently()'s comment for why this must stay invisible. */
     fun onDriveAuthorizationFailed() {
         _uiState.value = _uiState.value.copy(isDriveConnected = false, driveAccountEmail = null)
+    }
+
+    /** An explicit, user-initiated Connect/Switch-account attempt failed (Play Services returned an error, or the interactive consent intent itself failed) -- unlike onDriveAuthorizationFailed(), this DOES surface a message, since the user is actively watching for a result right now. */
+    fun onDriveConnectFailed() {
+        _uiState.value = _uiState.value.copy(
+            isDriveConnected = false,
+            driveAccountEmail = null,
+            driveAuthError = "Couldn't connect to Google Drive. Please try again."
+        )
     }
 
     fun onDriveSilentCheckSucceeded() {
@@ -737,6 +752,7 @@ class ReaderViewModel @JvmOverloads constructor(
         _uiState.value = _uiState.value.copy(
             isDriveConnected = false,
             driveAccountEmail = null,
+            driveAuthError = null,
             jumpToEntries = emptyList(),
             jumpToBreadcrumbs = emptyList(),
             jumpToError = null

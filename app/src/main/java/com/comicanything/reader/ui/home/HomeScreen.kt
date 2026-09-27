@@ -344,6 +344,7 @@ fun HomeScreen(
             onDismiss = { showAboutDialog = false },
             isDriveConnected = state.isDriveConnected,
             accountEmail = state.driveAccountEmail,
+            authError = state.driveAuthError,
             onConnectDrive = onConnectDrive,
             onDisconnectDrive = onDisconnectDrive,
             onSwitchDriveAccount = onSwitchDriveAccount,
@@ -357,6 +358,7 @@ private fun AboutDialog(
     onDismiss: () -> Unit,
     isDriveConnected: Boolean,
     accountEmail: String?,
+    authError: String?,
     onConnectDrive: () -> Unit,
     onDisconnectDrive: () -> Unit,
     onSwitchDriveAccount: () -> Unit,
@@ -426,6 +428,15 @@ private fun AboutDialog(
                         color = Color.White,
                         fontSize = 13.sp
                     )
+                    if (authError != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = authError,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(onClick = onConnectDrive) {
                         Text("Connect")

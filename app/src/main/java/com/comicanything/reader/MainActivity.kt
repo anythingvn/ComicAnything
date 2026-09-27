@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
             Unit
         } catch (e: ApiException) {
             Log.w("MainActivity", "Drive authorization intent failed", e)
-            viewModel.onDriveAuthorizationFailed()
+            viewModel.onDriveConnectFailed()
         }
     }
 
@@ -291,7 +291,7 @@ class MainActivity : ComponentActivity() {
             .addOnSuccessListener { result ->
                 if (result.hasResolution()) {
                     val pendingIntent = result.pendingIntent ?: run {
-                        viewModel.onDriveAuthorizationFailed()
+                        viewModel.onDriveConnectFailed()
                         return@addOnSuccessListener
                     }
                     driveAuthLauncher.launch(
@@ -306,7 +306,7 @@ class MainActivity : ComponentActivity() {
             }
             .addOnFailureListener { e ->
                 Log.w("MainActivity", "Drive authorization request failed", e)
-                viewModel.onDriveAuthorizationFailed()
+                viewModel.onDriveConnectFailed()
             }
     }
 
@@ -335,7 +335,7 @@ class MainActivity : ComponentActivity() {
             .addOnSuccessListener { result ->
                 if (result.hasResolution()) {
                     val pendingIntent = result.pendingIntent ?: run {
-                        viewModel.onDriveAuthorizationFailed()
+                        viewModel.onDriveConnectFailed()
                         return@addOnSuccessListener
                     }
                     driveAuthLauncher.launch(
@@ -351,7 +351,7 @@ class MainActivity : ComponentActivity() {
             }
             .addOnFailureListener { e ->
                 Log.w("MainActivity", "Drive authorization request failed", e)
-                viewModel.onDriveAuthorizationFailed()
+                viewModel.onDriveConnectFailed()
             }
     }
 

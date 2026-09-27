@@ -1576,9 +1576,43 @@ class ReaderViewModelTest {
 
         assertFalse(viewModel.uiState.value.isDriveConnected)
         assertNull(viewModel.uiState.value.driveAccountEmail)
+        // The silent background re-check must never surface an error to the user -- see
+        // onDriveConnectFailed's doc comment for the distinction from an explicit attempt.
+        assertNull(viewModel.uiState.value.driveAuthError)
         val persisted = connectionRepo.get()
         assertTrue(persisted.isConnected)
         assertEquals("reader@example.com", persisted.accountEmail)
+    }
+
+    @Test
+    fun `onDriveConnectFailed surfaces an error message unlike the silent check`() = runTest {
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
+        )
+
+        viewModel.onDriveConnectFailed()
+
+        assertFalse(viewModel.uiState.value.isDriveConnected)
+        assertNull(viewModel.uiState.value.driveAccountEmail)
+        assertEquals("Couldn't connect to Google Drive. Please try again.", viewModel.uiState.value.driveAuthError)
+    }
+
+    @Test
+    fun `onDriveAuthorized clears a previous connect-failure error`() = runTest {
+        val viewModel = ReaderViewModel(
+            application = fakeApplication,
+            ioDispatcher = Dispatchers.Unconfined,
+            progressRepo = progressRepo,
+            connectionRepo = connectionRepo, driveLibraryRepo = { driveLibraryRepo }
+        )
+        viewModel.onDriveConnectFailed()
+
+        viewModel.onDriveAuthorized("reader@example.com")
+
+        assertNull(viewModel.uiState.value.driveAuthError)
     }
 
     @Test
